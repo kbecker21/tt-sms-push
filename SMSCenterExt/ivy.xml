@@ -1,0 +1,32 @@
+<ivy-module version="2.0">
+    <info organisation="at.co.ttm" module="countermanager"/>
+
+    <configurations>
+        <conf name="compile" description="Required to compile application"/>
+        <conf name="runtime" description="Additional run-time dependencies" extends="compile"/>
+        <conf name="test"    description="Required for test only" extends="runtime"/>
+        <conf name="sources" visibility="public"/>
+        <conf name="javadoc" visibility="public"/>
+    </configurations>
+
+    <dependencies defaultconf="compile->default;sources->sources;javadoc->javadoc">
+        <!-- https://mvnrepository.com/artifact/com.microsoft.sqlserver/mssql-jdbc -->
+        <dependency org="com.microsoft.sqlserver" name="mssql-jdbc" rev="12.2.0.jre11"/>
+        <!-- https://mvnrepository.com/artifact/com.microsoft.sqlserver/mssql-jdbc_auth -->
+        <dependency org="com.microsoft.sqlserver" name="mssql-jdbc_auth" rev="12.2.0.x64" conf="runtime->default"/>
+        <!-- https://mvnrepository.com/artifact/org.slf4j/slf4j-log4j12 -->
+        <dependency org="org.slf4j" name="slf4j-log4j12" rev="1.7.32"/>
+        <!-- https://mvnrepository.com/artifact/org.jsmpp/jsmpp -->
+        <dependency org="org.jsmpp" name="jsmpp" rev="2.3.11"/>
+        
+        <!-- https://mvnrepository.com/artifact/com.squareup.okhttp3/okhttp -->
+        <dependency org="com.squareup.okhttp3" name="okhttp" rev="4.12.0"/>
+        <!-- https://mvnrepository.com/artifact/com.google.code.gson/gson -->
+        <dependency org="com.google.code.gson" name="gson" rev="2.11.0"/>
+
+        <!-- Test libs -->
+                
+        <!-- Avoid evicting modules when resolving dependencies -->
+        <conflict manager="all" />
+    </dependencies>
+</ivy-module>

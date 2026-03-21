@@ -1,0 +1,10 @@
+/mssql-jdbc_auth-8.2.2.x64.dll
+/mssql-jdbc_auth-8.4.0.x64.dll
+/SMSServer.conf
+/build
+/Output
+/mssql-jdbc_auth-8.4.1.x64.dll
+/sqljdbc_auth.dll
+/dist
+/hs_err_pid*.log
+/push-service/dist/
