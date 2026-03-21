@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="push-service" default="dist" basedir="." xmlns:ivy="antlib:org.apache.ivy.ant">
+
+    <property name="src.dir" value="src"/>
+    <property name="build.dir" value="build"/>
+    <property name="classes.dir" value="${build.dir}/classes"/>
+    <property name="lib.dir" value="lib"/>
+    <property name="dist.dir" value="dist"/>
+    <property name="conf.dir" value="conf"/>
+    <property name="web.dir" value="web"/>
+    <property name="jar.file" value="push-service.jar"/>
+    <property name="main.class" value="com.ttm.push.PushServer"/>
+
+    <!-- Ivy Bootstrap -->
+    <property name="ivy.install.version" value="2.5.2"/>
+    <property name="ivy.jar.dir" value="${user.home}/.ant/lib"/>
+    <property name="ivy.jar.file" value="${ivy.jar.dir}/ivy.jar"/>
+
+    <available property="ivy.installed" file="${ivy.jar.file}"/>
+
+    <target name="download-ivy" unless="ivy.installed">
+        <mkdir dir="${ivy.jar.dir}"/>
+        <get src="https://repo1.maven.org/maven2/org/apache/ivy/ivy/${ivy.install.version}/ivy-${ivy.install.version}.jar"
+             dest="${ivy.jar.file}" usetimestamp="true"/>
+    </target>
+
+    <target name="install-ivy" depends="download-ivy">
+        <path id="ivy.lib.path">
+            <fileset dir="${ivy.jar.dir}" includes="*.jar"/>
+        </path>
+        <taskdef resource="org/apache/ivy/ant/antlib.xml" uri="antlib:org.apache.ivy.ant"
+                 classpathref="ivy.lib.path"/>
+    </target>
+
+    <target name="resolve" depends="install-ivy" description="Resolve dependencies with Ivy">
+        <ivy:retrieve pattern="${lib.dir}/[artifact]-[type]-[revision].[ext]"/>
+    </target>
+
+    <target name="compile" depends="resolve" description="Compile source code">
+        <mkdir dir="${classes.dir}"/>
+        <javac srcdir="${src.dir}" destdir="${classes.dir}" includeantruntime="false"
+               source="17" target="17" encoding="UTF-8">
+            <classpath>
+                <fileset dir="${lib.dir}" includes="*.jar"/>
+            </classpath>
+            <compilerarg value="--add-exports"/>
+            <compilerarg value="jdk.httpserver/com.sun.net.httpserver=ALL-UNNAMED"/>
+        </javac>
+    </target>
+
+    <target name="jar" depends="compile" description="Create JAR file">
+        <jar destfile="${build.dir}/${jar.file}" basedir="${classes.dir}">
+            <manifest>
+                <attribute name="Main-Class" value="${main.class}"/>
+            </manifest>
+        </jar>
+    </target>
+
+    <target name="dist" depends="jar" description="Create distribution">
+        <mkdir dir="${dist.dir}"/>
+        <mkdir dir="${dist.dir}/lib"/>
+        <mkdir dir="${dist.dir}/conf"/>
+        <mkdir dir="${dist.dir}/web"/>
+
+        <copy file="${build.dir}/${jar.file}" todir="${dist.dir}"/>
+        <copy todir="${dist.dir}/lib">
+            <fileset dir="${lib.dir}" includes="*.jar"/>
+        </copy>
+        <copy todir="${dist.dir}/web">
+            <fileset dir="${web.dir}"/>
+        </copy>
+        <copy todir="${dist.dir}/conf">
+            <fileset dir="${conf.dir}"/>
+        </copy>
+
+        <!-- Start scripts -->
+        <echo file="${dist.dir}/start.sh">#!/bin/bash
+cd "$(dirname "$0")"
+java -cp "push-service.jar:lib/*" com.ttm.push.PushServer
+</echo>
+        <chmod file="${dist.dir}/start.sh" perm="755"/>
+
+        <echo file="${dist.dir}/start.bat">@echo off
+cd /d "%~dp0"
+java -cp "push-service.jar;lib\*" com.ttm.push.PushServer
+</echo>
+    </target>
+
+    <target name="generate-vapid-keys" depends="compile" description="Generate VAPID key pair">
+        <java classname="com.ttm.push.push.WebPushCrypto" fork="true">
+            <classpath>
+                <pathelement location="${classes.dir}"/>
+                <fileset dir="${lib.dir}" includes="*.jar"/>
+            </classpath>
+            <arg value="generate-keys"/>
+        </java>
+    </target>
+
+    <target name="clean" description="Clean build output">
+        <delete dir="${build.dir}"/>
+        <delete dir="${dist.dir}"/>
+    </target>
+
+    <target name="clean-all" depends="clean" description="Clean everything including libs">
+        <delete dir="${lib.dir}"/>
+    </target>
+
+</project>

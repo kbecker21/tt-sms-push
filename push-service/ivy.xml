@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ivy-module version="2.0">
+    <info organisation="com.ttm" module="push-service"/>
+    <dependencies>
+        <dependency org="com.google.code.gson" name="gson" rev="2.11.0"/>
+        <dependency org="org.slf4j" name="slf4j-log4j12" rev="1.7.32"/>
+        <dependency org="com.h2database" name="h2" rev="2.2.224"/>
+        <dependency org="com.microsoft.sqlserver" name="mssql-jdbc" rev="12.2.0.jre11"/>
+    </dependencies>
+</ivy-module>

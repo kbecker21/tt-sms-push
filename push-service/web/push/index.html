@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TTM Push-Benachrichtigungen</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1a5276">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1 id="title">Push-Benachrichtigungen</h1>
+            <p id="subtitle" class="subtitle">Tischtennis-Turnier</p>
+        </header>
+
+        <div id="player-info" class="player-info" style="display:none;">
+            <span id="player-label">Spieler:</span> <strong id="player-id"></strong>
+        </div>
+
+        <div id="status" class="status"></div>
+
+        <button id="subscribe-btn" class="btn" disabled>
+            <span id="btn-text">Push-Benachrichtigungen aktivieren</span>
+        </button>
+
+        <div id="messages-section" style="display:none;">
+            <h2 id="messages-title">Nachrichten</h2>
+            <ul id="messages-list" class="messages-list"></ul>
+            <button id="clear-btn" class="btn btn-secondary" onclick="clearMessages()">
+                <span id="clear-text">Nachrichten löschen</span>
+            </button>
+        </div>
+
+        <div id="unsupported" class="error" style="display:none;">
+            <span id="unsupported-text">Push-Benachrichtigungen werden von diesem Browser nicht unterstützt.</span>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
