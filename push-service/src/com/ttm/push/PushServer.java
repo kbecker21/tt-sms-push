@@ -5,6 +5,8 @@ import com.ttm.push.db.Database;
 import com.ttm.push.handler.RegistrationHandler;
 import com.ttm.push.handler.SendHandler;
 import com.ttm.push.handler.StaticFileHandler;
+import com.ttm.push.handler.StatusHandler;
+import com.ttm.push.handler.UnregisterHandler;
 import com.ttm.push.push.WebPushService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +45,8 @@ public class PushServer
 		HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
 		server.createContext("/api/push/register", new RegistrationHandler(db));
 		server.createContext("/api/push/send", new SendHandler(db, pushService, apiKey));
+		server.createContext("/api/push/status", new StatusHandler(db));
+		server.createContext("/api/push/unregister", new UnregisterHandler(db));
 		server.createContext("/push", new StaticFileHandler(Path.of(webDir, "push")));
 		server.setExecutor(Executors.newFixedThreadPool(10));
 

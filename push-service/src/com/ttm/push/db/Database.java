@@ -149,6 +149,35 @@ public class Database
 		return devices;
 	}
 
+	public synchronized boolean isDeviceRegistered(String playerId, String endpoint) throws SQLException
+	{
+		Connection conn = getConnection();
+		String sql = "SELECT COUNT(*) FROM device_registrations WHERE player_id = ? AND endpoint = ?";
+		try (PreparedStatement ps = conn.prepareStatement(sql))
+		{
+			ps.setString(1, playerId);
+			ps.setString(2, endpoint);
+			try (ResultSet rs = ps.executeQuery())
+			{
+				rs.next();
+				return rs.getInt(1) > 0;
+			}
+		}
+	}
+
+	public synchronized void deleteDeviceByPlayerAndEndpoint(String playerId, String endpoint) throws SQLException
+	{
+		Connection conn = getConnection();
+		String sql = "DELETE FROM device_registrations WHERE player_id = ? AND endpoint = ?";
+		try (PreparedStatement ps = conn.prepareStatement(sql))
+		{
+			ps.setString(1, playerId);
+			ps.setString(2, endpoint);
+			int rows = ps.executeUpdate();
+			log.info("Deleted {} registration(s) for player {} ", rows, playerId);
+		}
+	}
+
 	public synchronized void deleteDevice(long id) throws SQLException
 	{
 		Connection conn = getConnection();

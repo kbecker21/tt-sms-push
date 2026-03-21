@@ -9,12 +9,14 @@ const i18n = {
         playerLabel: 'Spieler:',
         btnActivate: 'Push-Benachrichtigungen aktivieren',
         btnRegistered: 'Registriert ✓',
+        btnUnsubscribe: 'Abmelden',
         messagesTitle: 'Nachrichten',
         clearText: 'Nachrichten löschen',
         unsupported: 'Push-Benachrichtigungen werden von diesem Browser nicht unterstützt.',
         noPlayer: 'Keine Spielernummer angegeben. URL-Format: ?player=2001',
         permDenied: 'Push-Berechtigung wurde verweigert.',
         registered: 'Push-Benachrichtigungen aktiviert!',
+        unsubscribed: 'Abmeldung erfolgreich.',
         error: 'Fehler bei der Registrierung: '
     },
     en: {
@@ -23,12 +25,14 @@ const i18n = {
         playerLabel: 'Player:',
         btnActivate: 'Enable Push Notifications',
         btnRegistered: 'Registered ✓',
+        btnUnsubscribe: 'Unsubscribe',
         messagesTitle: 'Messages',
         clearText: 'Clear Messages',
         unsupported: 'Push notifications are not supported in this browser.',
         noPlayer: 'No player number specified. URL format: ?player=2001',
         permDenied: 'Push permission was denied.',
         registered: 'Push notifications enabled!',
+        unsubscribed: 'Successfully unsubscribed.',
         error: 'Registration error: '
     },
     es: {
@@ -37,12 +41,14 @@ const i18n = {
         playerLabel: 'Jugador:',
         btnActivate: 'Activar Notificaciones Push',
         btnRegistered: 'Registrado ✓',
+        btnUnsubscribe: 'Cancelar suscripción',
         messagesTitle: 'Mensajes',
         clearText: 'Borrar Mensajes',
         unsupported: 'Las notificaciones push no son compatibles con este navegador.',
         noPlayer: 'No se especificó número de jugador. Formato URL: ?player=2001',
         permDenied: 'El permiso de push fue denegado.',
         registered: '¡Notificaciones push activadas!',
+        unsubscribed: 'Suscripción cancelada.',
         error: 'Error de registro: '
     },
     fr: {
@@ -51,12 +57,14 @@ const i18n = {
         playerLabel: 'Joueur:',
         btnActivate: 'Activer les Notifications Push',
         btnRegistered: 'Enregistré ✓',
+        btnUnsubscribe: 'Se désabonner',
         messagesTitle: 'Messages',
         clearText: 'Effacer les Messages',
         unsupported: 'Les notifications push ne sont pas prises en charge par ce navigateur.',
         noPlayer: 'Aucun numéro de joueur spécifié. Format URL: ?player=2001',
         permDenied: 'L\'autorisation push a été refusée.',
         registered: 'Notifications push activées!',
+        unsubscribed: 'Désabonnement réussi.',
         error: 'Erreur d\'enregistrement: '
     },
     ja: {
@@ -65,12 +73,14 @@ const i18n = {
         playerLabel: '選手:',
         btnActivate: 'プッシュ通知を有効にする',
         btnRegistered: '登録済み ✓',
+        btnUnsubscribe: '登録解除',
         messagesTitle: 'メッセージ',
         clearText: 'メッセージを削除',
         unsupported: 'このブラウザではプッシュ通知がサポートされていません。',
         noPlayer: '選手番号が指定されていません。URL形式: ?player=2001',
         permDenied: 'プッシュ通知の許可が拒否されました。',
         registered: 'プッシュ通知が有効になりました！',
+        unsubscribed: '登録が解除されました。',
         error: '登録エラー: '
     }
 };
@@ -87,6 +97,7 @@ document.getElementById('btn-text').textContent = t.btnActivate;
 document.getElementById('messages-title').textContent = t.messagesTitle;
 document.getElementById('clear-text').textContent = t.clearText;
 document.getElementById('unsupported-text').textContent = t.unsupported;
+document.getElementById('unsubscribe-text').textContent = t.btnUnsubscribe;
 
 // Get player ID from URL
 const params = new URLSearchParams(window.location.search);
@@ -153,6 +164,75 @@ function urlBase64ToUint8Array(base64String) {
     return outputArray;
 }
 
+// Show UI for registered state
+function showRegistered() {
+    btn.textContent = t.btnRegistered;
+    btn.classList.add('registered');
+    btn.disabled = true;
+    statusEl.textContent = t.registered;
+    statusEl.className = 'status success';
+    document.getElementById('unsubscribe-btn').style.display = '';
+}
+
+// Register subscription with server
+async function registerWithServer(subscription) {
+    const response = await fetch('/api/push/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            playerId: playerId,
+            subscription: subscription.toJSON()
+        })
+    });
+    if (!response.ok) {
+        throw new Error('Server returned ' + response.status);
+    }
+}
+
+// Check server-side registration status
+async function checkServerStatus(endpoint) {
+    const url = '/api/push/status?playerId=' + encodeURIComponent(playerId) +
+                '&endpoint=' + encodeURIComponent(endpoint);
+    const response = await fetch(url);
+    if (!response.ok) {
+        return false;
+    }
+    const data = await response.json();
+    return data.registered === true;
+}
+
+// Unsubscribe player from push notifications
+async function unsubscribe() {
+    try {
+        const registration = await navigator.serviceWorker.ready;
+        const subscription = await registration.pushManager.getSubscription();
+        if (subscription) {
+            await fetch('/api/push/unregister', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    playerId: playerId,
+                    subscription: { endpoint: subscription.endpoint }
+                })
+            });
+        }
+        // Clear local message history for this player
+        localStorage.removeItem('push_messages_' + playerId);
+        loadMessages();
+
+        // Reset UI to allow re-registration
+        btn.textContent = t.btnActivate;
+        btn.classList.remove('registered');
+        btn.disabled = false;
+        statusEl.textContent = t.unsubscribed;
+        statusEl.className = 'status success';
+        document.getElementById('unsubscribe-btn').style.display = 'none';
+    } catch (err) {
+        statusEl.textContent = t.error + err.message;
+        statusEl.className = 'status error';
+    }
+}
+
 async function init() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
         document.getElementById('unsupported').style.display = 'block';
@@ -171,17 +251,22 @@ async function init() {
         const registration = await navigator.serviceWorker.register('/push/sw.js', { scope: '/push/' });
         await navigator.serviceWorker.ready;
 
-        // Check existing subscription
+        // Check existing browser subscription
         const existing = await registration.pushManager.getSubscription();
         if (existing) {
-            btn.textContent = t.btnRegistered;
-            btn.classList.add('registered');
-            btn.disabled = true;
-            statusEl.textContent = t.registered;
-            statusEl.className = 'status success';
+            // Browser has a subscription — verify with server for THIS player
+            const serverKnows = await checkServerStatus(existing.endpoint);
+            if (serverKnows) {
+                showRegistered();
+            } else {
+                // Server doesn't know about this player — re-register silently
+                await registerWithServer(existing);
+                showRegistered();
+            }
             return;
         }
 
+        // No browser subscription — show subscribe button
         btn.disabled = false;
         btn.addEventListener('click', async function() {
             btn.disabled = true;
@@ -200,23 +285,8 @@ async function init() {
                     applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
                 });
 
-                const response = await fetch('/api/push/register', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        playerId: playerId,
-                        subscription: subscription.toJSON()
-                    })
-                });
-
-                if (response.ok) {
-                    btn.textContent = t.btnRegistered;
-                    btn.classList.add('registered');
-                    statusEl.textContent = t.registered;
-                    statusEl.className = 'status success';
-                } else {
-                    throw new Error('Server returned ' + response.status);
-                }
+                await registerWithServer(subscription);
+                showRegistered();
             } catch (err) {
                 statusEl.textContent = t.error + err.message;
                 statusEl.className = 'status error';

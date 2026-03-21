@@ -32,6 +32,7 @@ self.addEventListener('push', function(event) {
                     clients.forEach(function(client) {
                         client.postMessage({
                             type: 'push-message',
+                            title: data.title,
                             message: data.body
                         });
                     });
