@@ -3,7 +3,7 @@
 Dieses Dokument beschreibt Einrichtung, Konfiguration, Test und Betrieb der beiden
 Projekte **push-service** (Web-Push-Server) und **SMSCenterExt** (SMS-Gateway mit Push-Erweiterung).
 
-Stand: 2026-03-21
+Stand: 2026-03-22
 
 ---
 
@@ -140,6 +140,7 @@ push-service/
 │       ├── app.js                  # Browser-Logik
 │       ├── sw.js                   # Service Worker
 │       ├── style.css               # Styling
+│       ├── i18n.json               # Übersetzungen (DE, EN, ES, FR, JA)
 │       ├── manifest.json           # PWA-Manifest
 │       ├── icon-192.png            # App-Icon 192x192
 │       └── icon-512.png            # App-Icon 512x512
@@ -217,7 +218,7 @@ Private Key: zjXUUK3_OoJeobk5gEplbnj8Fo3XHtr_LZ9IbIfRKas
    vapid.private.key=zjXUUK3_OoJeobk...
    ```
 
-2. **Browser-JavaScript** `web/push/app.js` (Zeile 2):
+2. **Browser-JavaScript** `web/push/app.js` (Zeile 2, ganz oben in der Datei):
    ```javascript
    const VAPID_PUBLIC_KEY = 'BM_6rWcY-Ol77wUT...';
    ```
@@ -457,6 +458,13 @@ Content-Type: application/json
 - `sent`: Anzahl der Geräte, an die erfolgreich gesendet wurde
 - Wenn `sent: 0` und Spieler nicht registriert: zusätzlich `"message": "No devices registered for player 2001"`
 
+**Push-Payload**: Der Server sendet die Nachricht als JSON-Payload an den Browser:
+```json
+{"playerId": "2001", "message": "Ergebnis: Mueller 3:1 Schmidt"}
+```
+Die `playerId` wird mitgeschickt, damit der Service Worker die Nachricht dem richtigen
+Spieler zuordnen und in der System-Notification den Spieler anzeigen kann (z.B. "TTM - 2001").
+
 **Verhalten bei abgelaufenen Subscriptions**: Wenn der Browser-Push-Endpoint mit
 HTTP 410 (Gone) oder 404 antwortet, wird die Registrierung automatisch aus der DB gelöscht.
 
@@ -468,10 +476,22 @@ curl -X POST http://localhost:8080/api/push/send \
   -d '{"playerId": "TEST01", "message": "Ergebnis: Mueller 3:1 Schmidt"}'
 ```
 
-**curl-Beispiel** (Windows CMD — Anführungszeichen beachten):
+**curl-Beispiel** (Windows CMD):
 ```cmd
 curl -X POST http://localhost:8080/api/push/send -H "Authorization: Bearer changeme" -H "Content-Type: application/json" -d "{\"playerId\": \"TEST01\", \"message\": \"Ergebnis: Mueller 3:1 Schmidt\"}"
 ```
+
+**curl-Beispiel** (PowerShell — Anführungszeichen beachten!):
+```powershell
+# Variante 1: JSON in Variable (empfohlen)
+$body = '{"playerId":"TEST01","message":"Ergebnis: Mueller 3:1 Schmidt"}'
+curl.exe -X POST http://localhost:8080/api/push/send -H "Authorization: Bearer changeme" -H "Content-Type: application/json" -d $body
+
+# Variante 2: Inline (keine Leerzeichen im JSON)
+curl.exe -X POST http://localhost:8080/api/push/send -H "Authorization: Bearer changeme" -H "Content-Type: application/json" -d "{""playerId"":""TEST01"",""message"":""Ergebnis:Mueller_3:1_Schmidt""}"
+```
+**Wichtig**: In PowerShell müssen `curl.exe` (nicht `curl`, das ist ein Alias für `Invoke-WebRequest`)
+und die korrekte Anführungszeichen-Syntax verwendet werden. Bei Problemen Git Bash verwenden.
 
 ---
 
@@ -549,10 +569,10 @@ Liefert die PWA-Dateien (HTML, JS, CSS, Icons, Manifest) aus.
 
 ### 5.1 Registrierungs-Ablauf
 
-Wenn ein Spieler die URL aufruft (z.B. `http://localhost:8080/push/?player=2001`):
+**Variante A: URL mit Spielernummer** (z.B. `http://localhost:8080/push/?player=2001`):
 
 ```
-1. Seite wird geladen
+1. Übersetzungen laden (i18n.json) + Seite initialisieren
    ↓
 2. Service Worker (sw.js) wird registriert
    ↓
@@ -563,9 +583,8 @@ Wenn ein Spieler die URL aufruft (z.B. `http://localhost:8080/push/?player=2001`
    │        │
    │        ├─ Server sagt JA → "Registriert ✓" anzeigen + Abmelde-Button
    │        │
-   │        └─ Server sagt NEIN → Automatisch re-registrieren
-   │                              (POST /api/push/register)
-   │                              → "Registriert ✓" anzeigen + Abmelde-Button
+   │        └─ Server sagt NEIN → "Aktivieren"-Button anzeigen
+   │           (Spieler muss explizit klicken, um sich zu registrieren)
    │
    └─ NEIN → "Aktivieren"-Button anzeigen
               │
@@ -579,20 +598,42 @@ Wenn ein Spieler die URL aufruft (z.B. `http://localhost:8080/push/?player=2001`
                  └─ Verweigert → Fehlermeldung anzeigen
 ```
 
-**Kernverbesserung gegenüber der alten Version**: Die Seite prüft jetzt IMMER beim
-Server, ob die Registrierung tatsächlich existiert. Dadurch werden falsche
-"Registriert"-Anzeigen vermieden.
+**Variante B: URL ohne Spielernummer** (z.B. `http://localhost:8080/push/`):
+
+```
+1. Übersetzungen laden (i18n.json) + Seite initialisieren
+   ↓
+2. Kein ?player= Parameter erkannt → Spielernummer-Eingabefeld anzeigen
+   ↓
+3. Spieler gibt Nummer ein und klickt "Weiter" (oder Enter-Taste)
+   ↓
+4. Weiterleitung auf /push/?player=<eingegebene Nummer>
+   ↓
+5. Weiter wie bei Variante A
+```
+
+Diese Variante ermöglicht einen **universellen QR-Code** ohne spielerspezifische URL.
+In der Halle kann ein einziger QR-Code aufgehängt werden, den alle Spieler scannen.
+
+**Kernverbesserungen**:
+- Die Seite prüft IMMER beim Server, ob die Registrierung tatsächlich existiert
+- Kein stilles Auto-Registrieren mehr — neue Spieler müssen explizit den Button klicken
+- Nach Abmeldung ist der "Aktivieren"-Button sofort wieder klickbar
+- Nachrichten werden pro Spieler gefiltert (kein "Crosstalk" bei mehreren Spielern im selben Browser)
 
 ### 5.2 Service Worker
 
 Der Service Worker (`sw.js`) läuft als Hintergrundprozess im Browser:
 
 - **Push-Empfang**: Empfängt Push-Nachrichten auch wenn der Tab geschlossen ist
-- **Benachrichtigungen**: Zeigt Windows-/System-Notifications an (mit Icon, Vibration, Ton)
-- **Weiterleitung**: Leitet empfangene Nachrichten an offene Tabs weiter (dort werden
-  sie in der Nachrichtenliste angezeigt)
-- **Klick-Handling**: Beim Klick auf eine Notification wird der `/push/`-Tab fokussiert
-  oder ein neuer geöffnet
+- **Spieler-Zuordnung**: Liest die `playerId` aus dem Push-Payload und ordnet die
+  Nachricht dem richtigen Spieler zu
+- **Benachrichtigungen**: Zeigt Windows-/System-Notifications an mit Spieler-Kennung
+  im Titel (z.B. "TTM - TEST01"), Icon, Vibration und Ton
+- **Weiterleitung**: Leitet empfangene Nachrichten inkl. `playerId` an offene Tabs weiter.
+  Jeder Tab filtert und zeigt nur Nachrichten für "seinen" Spieler an
+- **Klick-Handling**: Beim Klick auf eine Notification wird bevorzugt der Tab des
+  betroffenen Spielers fokussiert, oder ein neuer mit der passenden Spieler-URL geöffnet
 
 **Lebenszyklus**: Browser stoppen und starten Service Worker automatisch. Ein
 "gestoppter" SW ist normal und kein Fehler — Push-Events wecken ihn sofort auf.
@@ -640,6 +681,11 @@ Die PWA erkennt die Browser-Sprache automatisch und unterstützt:
 
 Fallback bei unbekannter Sprache: Englisch.
 
+**Übersetzungsdatei**: Die Texte sind in `web/push/i18n.json` ausgelagert und werden
+beim Laden der Seite asynchron geladen. Bei einem Ladefehler greift ein eingebauter
+deutscher Fallback. Um Texte anzupassen oder neue Sprachen hinzuzufügen, nur die
+Datei `i18n.json` bearbeiten — kein Neustart des Servers nötig.
+
 ---
 
 ## 6. push-service — Testen
@@ -662,6 +708,13 @@ http://localhost:8080/push/?player=TEST01
 
 - Die Seite zeigt "Spieler: TEST01" und einen blauen "Aktivieren"-Button
 
+Alternativ ohne Spielernummer in der URL:
+```
+http://localhost:8080/push/
+```
+- Die Seite zeigt ein Eingabefeld für die Spielernummer
+- Nach Eingabe von "TEST01" und Klick auf "Weiter" → Weiterleitung auf `?player=TEST01`
+
 **Schritt 3**: Auf "Push-Benachrichtigungen aktivieren" klicken
 
 - Browser fragt nach Berechtigung → "Erlauben" wählen
@@ -669,13 +722,20 @@ http://localhost:8080/push/?player=TEST01
 - Darunter erscheint der "Abmelden"-Button
 - In der Server-Konsole: `INFO RegistrationHandler:64 - Device registered for player TEST01`
 
-**Schritt 4**: Push-Nachricht senden (Git Bash):
+**Schritt 4**: Push-Nachricht senden
 
+Git Bash:
 ```bash
 curl -X POST http://localhost:8080/api/push/send \
   -H "Authorization: Bearer changeme" \
   -H "Content-Type: application/json" \
   -d '{"playerId": "TEST01", "message": "Ergebnis: Mueller 3:1 Schmidt"}'
+```
+
+PowerShell:
+```powershell
+$body = '{"playerId":"TEST01","message":"Ergebnis: Mueller 3:1 Schmidt"}'
+curl.exe -X POST http://localhost:8080/api/push/send -H "Authorization: Bearer changeme" -H "Content-Type: application/json" -d $body
 ```
 
 Erwartete Antwort:
@@ -685,25 +745,25 @@ Erwartete Antwort:
 
 **Schritt 5**: Prüfen:
 - Im Browserfenster erscheint die Nachricht in der Nachrichtenliste
-- Windows zeigt rechts unten eine Notification-Popup
+- Windows zeigt rechts unten eine Notification mit "TTM - TEST01" als Titel
 
 ### 6.2 Erweiterter Test (Mehrere Spieler)
 
 Mehrere Spieler im **selben Browser** (Chrome) testen:
 
-**Tab 1**: `http://localhost:8080/push/?player=TEST01` → Registrieren
+**Tab 1**: `http://localhost:8080/push/?player=TEST01` → "Aktivieren" klicken → Registrieren
 
 **Tab 2** (neuer Tab): `http://localhost:8080/push/?player=TEST02`
 - Die Seite prüft automatisch beim Server → Server kennt TEST02 nicht
-- Die bestehende Browser-Subscription wird automatisch für TEST02 registriert
-- "Registriert ✓" wird angezeigt
+- Der "Aktivieren"-Button wird angezeigt (keine stille Auto-Registrierung!)
+- "Aktivieren" klicken → TEST02 wird registriert → "Registriert ✓"
 
 **Prüfung** in der Datenbank:
 ```sql
 SELECT * FROM device_registrations;
 -- Es sollten 2 Einträge sein:
 -- TEST01 mit endpoint https://fcm...
--- TEST02 mit demselben endpoint
+-- TEST02 mit demselben endpoint (gleicher Browser!)
 ```
 
 **Push-Test**:
@@ -721,9 +781,13 @@ curl -X POST http://localhost:8080/api/push/send \
   -d '{"playerId": "TEST02", "message": "Nachricht fuer TEST02"}'
 ```
 
-**Hinweis**: Da beide Spieler im selben Browser denselben Service Worker teilen,
-erscheinen beide Nachrichten als Windows-Notification. In der Nachrichtenliste im
-jeweiligen Tab erscheint die Nachricht nur bei dem Tab, der gerade offen ist.
+**Erwartetes Verhalten bei Mehrspielerbetrieb im selben Browser**:
+- Die **Nachrichtenliste** im jeweiligen Tab zeigt **nur** die Nachrichten für den
+  eigenen Spieler an. Eine Nachricht an TEST01 erscheint nur im TEST01-Tab.
+- **Windows-Notifications** zeigen den Spieler im Titel an (z.B. "TTM - TEST01"),
+  sodass sofort erkennbar ist, für wen die Nachricht bestimmt ist.
+- Da beide Spieler denselben Service Worker und Endpoint teilen, erhält der Browser
+  **alle** Nachrichten — die Filterung geschieht in `app.js` pro Tab.
 
 ### 6.3 Abmeldefunktion testen
 
@@ -731,8 +795,13 @@ jeweiligen Tab erscheint die Nachricht nur bei dem Tab, der gerade offen ist.
 2. Spieler ist registriert → "Registriert ✓" und "Abmelden"-Button sichtbar
 3. Auf "Abmelden" klicken
 4. Meldung "Abmeldung erfolgreich." erscheint
-5. Der "Aktivieren"-Button ist wieder sichtbar
+5. Der "Aktivieren"-Button ist wieder sichtbar und **klickbar**
 6. Die Nachrichtenliste ist gelöscht
+7. **Erneut anmelden**: Auf "Aktivieren" klicken → Spieler wird wieder registriert
+
+**Hinweis**: Die Browser-Subscription wird bei der Abmeldung bewusst NICHT gelöscht,
+da andere Spieler auf demselben Gerät sie noch verwenden könnten. Es wird nur der
+Server-Eintrag (DB) gelöscht.
 
 **Prüfung in der DB**:
 ```sql
@@ -796,8 +865,12 @@ DROP TABLE device_registrations;
 | Push kommt nicht an | Subscription abgelaufen (410) | Spieler muss sich neu registrieren; alte Einträge werden automatisch gelöscht |
 | Server startet nicht | Port belegt | `netstat -aon | findstr :8080` prüfen, anderen Port konfigurieren |
 | "VAPID keys not configured" | Keys nicht eingetragen | Siehe Abschnitt 3.4 |
-| Mehrere Spieler funktionieren nicht | Alte app.js im Cache | Ctrl+F5 oder Browser-Cache leeren |
+| Mehrere Spieler funktionieren nicht | Alte app.js/sw.js im Cache | Ctrl+F5, Browser-Cache leeren, SW in DevTools de-/re-registrieren |
 | Nachricht kommt doppelt | Mehrere Registrierungen in DB | `SELECT * FROM device_registrations` prüfen, Duplikate löschen |
+| Nachricht in falschem Tab | Alter SW ohne playerId-Filter im Cache | SW in `chrome://serviceworker-internals` auf "Unregister" klicken, Seite neu laden |
+| curl JSON-Fehler (EOFException) | PowerShell zerstückelt den JSON-String | Git Bash verwenden oder JSON in `$body`-Variable (siehe 4.2) |
+| curl "Could not resolve host" | PowerShell interpretiert Wörter als Hosts | JSON ohne Leerzeichen senden oder `$body`-Variable verwenden |
+| "Aktivieren"-Button tut nichts | Alter app.js-Cache ohne Fix | Ctrl+F5 (Hard Reload) oder SW deregistrieren |
 
 **Browser-Entwicklertools nutzen (F12)**:
 - **Console**: JavaScript-Fehler und Log-Meldungen
@@ -1068,17 +1141,26 @@ push-service stehen, der HTTPS terminiert.
    - Pattern: `^(push/.*|api/push/.*)$`
    - Rewrite URL: `http://localhost:8080/{R:0}`
 
-### QR-Code für Spieler
+### QR-Codes für Spieler
 
-Für den praktischen Einsatz bei Turnieren können QR-Codes generiert werden:
+Für den praktischen Einsatz bei Turnieren gibt es zwei Varianten:
 
+**Variante 1: Spielerspezifischer QR-Code** (z.B. auf dem persönlichen Spielplan)
 ```
 URL-Format: https://www.ttm.co.at/push/?player={spielernummer}
 Beispiel:   https://www.ttm.co.at/push/?player=2001
 ```
+Der Spieler scannt, die Registrierungsseite öffnet sich direkt mit seiner Nummer.
 
-Der QR-Code kann z.B. auf Spielpläne gedruckt werden, damit Spieler sich
-schnell per Smartphone registrieren können.
+**Variante 2: Universeller QR-Code** (z.B. als Aushang in der Halle)
+```
+URL-Format: https://www.ttm.co.at/push/
+```
+Der Spieler scannt, gibt seine Spielernummer im Eingabefeld ein und wird dann
+auf die Registrierungsseite mit seiner Nummer weitergeleitet.
+
+**Vorteil von Variante 2**: Es muss nur **ein** QR-Code gedruckt und aufgehängt
+werden, der für alle Spieler funktioniert.
 
 ### push-service als Windows-Dienst
 
@@ -1101,8 +1183,11 @@ nssm start PushService
   der Status "stopped" angezeigt — das ist kein Fehler.
 
 - **Ein SW pro Scope**: Alle Tabs unter `/push/` teilen denselben Service Worker.
-  Deshalb können mehrere Spieler im selben Browser über verschiedene Tabs registriert
-  werden, aber die Push-Notifications kommen alle über denselben SW.
+  Mehrere Spieler im selben Browser teilen denselben Push-Endpoint. Der Service Worker
+  empfängt alle Nachrichten und leitet sie mit der `playerId` an alle offenen Tabs weiter.
+  Jeder Tab filtert dann und zeigt nur die Nachrichten für "seinen" Spieler an.
+  Windows-Notifications zeigen die Spielernummer im Titel, damit erkennbar ist,
+  für wen die Nachricht bestimmt ist.
 
 ### Browser-Kompatibilität
 

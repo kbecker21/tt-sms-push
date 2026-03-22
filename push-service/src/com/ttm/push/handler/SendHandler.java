@@ -85,7 +85,11 @@ public class SendHandler implements HttpHandler
 			{
 				try
 				{
-					int statusCode = pushService.sendPush(device, message);
+					// Include playerId in payload so SW can route messages per player
+				JsonObject payload = new JsonObject();
+				payload.addProperty("playerId", playerId);
+				payload.addProperty("message", message);
+				int statusCode = pushService.sendPush(device, gson.toJson(payload));
 					if (statusCode == 201 || statusCode == 202)
 					{
 						sent++;

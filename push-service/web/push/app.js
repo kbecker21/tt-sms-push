@@ -1,103 +1,8 @@
 // VAPID Public Key — nach 'ant generate-vapid-keys' hier eintragen
-const VAPID_PUBLIC_KEY = 'BM_6rWcY-Ol77wUT9nvz1YQKL18v_rfTIaKzFLOrdYGyqrfVKtOK_5GH-j4F6SBs7sXz35NYwHgNTFQBrcaaDVw';
+const VAPID_PUBLIC_KEY = 'BMc9QDpeA0mXWd46pcWDl4FK7nfqhasWhP9zvjcFQZ5wRWeAKLyYwlS62RxUvo_VbQZSQoWhui4UAlPkpIrhteA';
 
-// i18n translations
-const i18n = {
-    de: {
-        title: 'Push-Benachrichtigungen',
-        subtitle: 'Tischtennis-Turnier',
-        playerLabel: 'Spieler:',
-        btnActivate: 'Push-Benachrichtigungen aktivieren',
-        btnRegistered: 'Registriert ✓',
-        btnUnsubscribe: 'Abmelden',
-        messagesTitle: 'Nachrichten',
-        clearText: 'Nachrichten löschen',
-        unsupported: 'Push-Benachrichtigungen werden von diesem Browser nicht unterstützt.',
-        noPlayer: 'Keine Spielernummer angegeben. URL-Format: ?player=2001',
-        permDenied: 'Push-Berechtigung wurde verweigert.',
-        registered: 'Push-Benachrichtigungen aktiviert!',
-        unsubscribed: 'Abmeldung erfolgreich.',
-        error: 'Fehler bei der Registrierung: '
-    },
-    en: {
-        title: 'Push Notifications',
-        subtitle: 'Table Tennis Tournament',
-        playerLabel: 'Player:',
-        btnActivate: 'Enable Push Notifications',
-        btnRegistered: 'Registered ✓',
-        btnUnsubscribe: 'Unsubscribe',
-        messagesTitle: 'Messages',
-        clearText: 'Clear Messages',
-        unsupported: 'Push notifications are not supported in this browser.',
-        noPlayer: 'No player number specified. URL format: ?player=2001',
-        permDenied: 'Push permission was denied.',
-        registered: 'Push notifications enabled!',
-        unsubscribed: 'Successfully unsubscribed.',
-        error: 'Registration error: '
-    },
-    es: {
-        title: 'Notificaciones Push',
-        subtitle: 'Torneo de Tenis de Mesa',
-        playerLabel: 'Jugador:',
-        btnActivate: 'Activar Notificaciones Push',
-        btnRegistered: 'Registrado ✓',
-        btnUnsubscribe: 'Cancelar suscripción',
-        messagesTitle: 'Mensajes',
-        clearText: 'Borrar Mensajes',
-        unsupported: 'Las notificaciones push no son compatibles con este navegador.',
-        noPlayer: 'No se especificó número de jugador. Formato URL: ?player=2001',
-        permDenied: 'El permiso de push fue denegado.',
-        registered: '¡Notificaciones push activadas!',
-        unsubscribed: 'Suscripción cancelada.',
-        error: 'Error de registro: '
-    },
-    fr: {
-        title: 'Notifications Push',
-        subtitle: 'Tournoi de Tennis de Table',
-        playerLabel: 'Joueur:',
-        btnActivate: 'Activer les Notifications Push',
-        btnRegistered: 'Enregistré ✓',
-        btnUnsubscribe: 'Se désabonner',
-        messagesTitle: 'Messages',
-        clearText: 'Effacer les Messages',
-        unsupported: 'Les notifications push ne sont pas prises en charge par ce navigateur.',
-        noPlayer: 'Aucun numéro de joueur spécifié. Format URL: ?player=2001',
-        permDenied: 'L\'autorisation push a été refusée.',
-        registered: 'Notifications push activées!',
-        unsubscribed: 'Désabonnement réussi.',
-        error: 'Erreur d\'enregistrement: '
-    },
-    ja: {
-        title: 'プッシュ通知',
-        subtitle: '卓球トーナメント',
-        playerLabel: '選手:',
-        btnActivate: 'プッシュ通知を有効にする',
-        btnRegistered: '登録済み ✓',
-        btnUnsubscribe: '登録解除',
-        messagesTitle: 'メッセージ',
-        clearText: 'メッセージを削除',
-        unsupported: 'このブラウザではプッシュ通知がサポートされていません。',
-        noPlayer: '選手番号が指定されていません。URL形式: ?player=2001',
-        permDenied: 'プッシュ通知の許可が拒否されました。',
-        registered: 'プッシュ通知が有効になりました！',
-        unsubscribed: '登録が解除されました。',
-        error: '登録エラー: '
-    }
-};
-
-// Detect language
-const userLang = navigator.language.substring(0, 2);
-const t = i18n[userLang] || i18n.en;
-
-// Apply translations
-document.getElementById('title').textContent = t.title;
-document.getElementById('subtitle').textContent = t.subtitle;
-document.getElementById('player-label').textContent = t.playerLabel;
-document.getElementById('btn-text').textContent = t.btnActivate;
-document.getElementById('messages-title').textContent = t.messagesTitle;
-document.getElementById('clear-text').textContent = t.clearText;
-document.getElementById('unsupported-text').textContent = t.unsupported;
-document.getElementById('unsubscribe-text').textContent = t.btnUnsubscribe;
+// i18n — loaded from external file
+let t = {};
 
 // Get player ID from URL
 const params = new URLSearchParams(window.location.search);
@@ -106,9 +11,56 @@ const playerId = params.get('player');
 const statusEl = document.getElementById('status');
 const btn = document.getElementById('subscribe-btn');
 
-if (playerId) {
-    document.getElementById('player-info').style.display = 'block';
-    document.getElementById('player-id').textContent = playerId;
+// Track the current browser subscription for re-use after unsubscribe
+let currentSubscription = null;
+
+// Load i18n translations from external file
+async function loadI18n() {
+    try {
+        const response = await fetch('/push/i18n.json');
+        const i18n = await response.json();
+        const userLang = navigator.language.substring(0, 2);
+        t = i18n[userLang] || i18n.en;
+    } catch (e) {
+        // Fallback: German defaults if i18n.json fails to load
+        t = {
+            title: 'Push-Benachrichtigungen', subtitle: 'Tischtennis-Turnier',
+            playerLabel: 'Spieler:', btnActivate: 'Push-Benachrichtigungen aktivieren',
+            btnRegistered: 'Registriert ✓', btnUnsubscribe: 'Abmelden',
+            messagesTitle: 'Nachrichten', clearText: 'Nachrichten löschen',
+            unsupported: 'Push-Benachrichtigungen werden von diesem Browser nicht unterstützt.',
+            noPlayer: 'Keine Spielernummer angegeben. URL-Format: ?player=2001',
+            permDenied: 'Push-Berechtigung wurde verweigert.',
+            registered: 'Push-Benachrichtigungen aktiviert!',
+            unsubscribed: 'Abmeldung erfolgreich.', error: 'Fehler bei der Registrierung: ',
+            playerInputLabel: 'Spielernummer eingeben:', playerInputPlaceholder: 'z.B. 2001',
+            playerSubmitBtn: 'Weiter'
+        };
+    }
+}
+
+// Apply translations to all UI elements
+function applyTranslations() {
+    document.getElementById('title').textContent = t.title;
+    document.getElementById('subtitle').textContent = t.subtitle;
+    document.getElementById('player-label').textContent = t.playerLabel;
+    document.getElementById('btn-text').textContent = t.btnActivate;
+    document.getElementById('messages-title').textContent = t.messagesTitle;
+    document.getElementById('clear-text').textContent = t.clearText;
+    document.getElementById('unsupported-text').textContent = t.unsupported;
+    document.getElementById('unsubscribe-text').textContent = t.btnUnsubscribe;
+
+    var playerInputLabel = document.getElementById('player-input-label');
+    if (playerInputLabel) playerInputLabel.textContent = t.playerInputLabel;
+    var playerInput = document.getElementById('player-input');
+    if (playerInput) playerInput.placeholder = t.playerInputPlaceholder;
+    var playerSubmitText = document.getElementById('player-submit-text');
+    if (playerSubmitText) playerSubmitText.textContent = t.playerSubmitBtn;
+
+    if (playerId) {
+        document.getElementById('player-info').style.display = 'block';
+        document.getElementById('player-id').textContent = playerId;
+    }
 }
 
 // Load and display stored messages
@@ -139,6 +91,10 @@ function clearMessages() {
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', function(event) {
         if (event.data && event.data.type === 'push-message') {
+            // Only process messages for THIS player (ignore messages for other players)
+            if (event.data.playerId && event.data.playerId !== playerId) {
+                return;
+            }
             const messages = JSON.parse(localStorage.getItem('push_messages_' + playerId) || '[]');
             messages.unshift({
                 text: event.data.message,
@@ -169,6 +125,7 @@ function showRegistered() {
     btn.textContent = t.btnRegistered;
     btn.classList.add('registered');
     btn.disabled = true;
+    btn.onclick = null;
     statusEl.textContent = t.registered;
     statusEl.className = 'status success';
     document.getElementById('unsubscribe-btn').style.display = '';
@@ -201,6 +158,49 @@ async function checkServerStatus(endpoint) {
     return data.registered === true;
 }
 
+// Attach click handler for subscribe button (works with existing or new subscription)
+function attachSubscribeHandler(existingSubscription) {
+    btn.textContent = t.btnActivate;
+    btn.classList.remove('registered');
+    btn.disabled = false;
+    document.getElementById('unsubscribe-btn').style.display = 'none';
+
+    btn.onclick = async function() {
+        btn.disabled = true;
+
+        try {
+            if (existingSubscription) {
+                // Re-use existing browser subscription
+                await registerWithServer(existingSubscription);
+                showRegistered();
+            } else {
+                // Create new browser subscription
+                const permission = await Notification.requestPermission();
+                if (permission !== 'granted') {
+                    statusEl.textContent = t.permDenied;
+                    statusEl.className = 'status error';
+                    btn.disabled = false;
+                    return;
+                }
+
+                const registration = await navigator.serviceWorker.ready;
+                const subscription = await registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+                });
+
+                currentSubscription = subscription;
+                await registerWithServer(subscription);
+                showRegistered();
+            }
+        } catch (err) {
+            statusEl.textContent = t.error + err.message;
+            statusEl.className = 'status error';
+            btn.disabled = false;
+        }
+    };
+}
+
 // Unsubscribe player from push notifications
 async function unsubscribe() {
     try {
@@ -215,18 +215,17 @@ async function unsubscribe() {
                     subscription: { endpoint: subscription.endpoint }
                 })
             });
+            // Keep browser subscription alive for other players — do NOT call subscription.unsubscribe()
+            currentSubscription = subscription;
         }
-        // Clear local message history for this player
+        // Clear local message history for this player only
         localStorage.removeItem('push_messages_' + playerId);
         loadMessages();
 
-        // Reset UI to allow re-registration
-        btn.textContent = t.btnActivate;
-        btn.classList.remove('registered');
-        btn.disabled = false;
+        // Reset UI and attach handler for re-registration
         statusEl.textContent = t.unsubscribed;
         statusEl.className = 'status success';
-        document.getElementById('unsubscribe-btn').style.display = 'none';
+        attachSubscribeHandler(currentSubscription);
     } catch (err) {
         statusEl.textContent = t.error + err.message;
         statusEl.className = 'status error';
@@ -239,9 +238,30 @@ async function init() {
         return;
     }
 
+    // FEATURE 1: No player parameter — show input field
     if (!playerId) {
-        statusEl.textContent = t.noPlayer;
-        statusEl.className = 'status error';
+        var inputSection = document.getElementById('player-input-section');
+        if (inputSection) {
+            inputSection.style.display = 'block';
+            var submitBtn = document.getElementById('player-submit-btn');
+            var inputField = document.getElementById('player-input');
+
+            submitBtn.onclick = function() {
+                var val = inputField.value.trim();
+                if (val) {
+                    window.location.href = window.location.pathname + '?player=' + encodeURIComponent(val);
+                }
+            };
+            // Allow Enter key to submit
+            inputField.onkeydown = function(e) {
+                if (e.key === 'Enter') {
+                    submitBtn.onclick();
+                }
+            };
+        } else {
+            statusEl.textContent = t.noPlayer;
+            statusEl.className = 'status error';
+        }
         return;
     }
 
@@ -254,49 +274,29 @@ async function init() {
         // Check existing browser subscription
         const existing = await registration.pushManager.getSubscription();
         if (existing) {
+            currentSubscription = existing;
             // Browser has a subscription — verify with server for THIS player
             const serverKnows = await checkServerStatus(existing.endpoint);
             if (serverKnows) {
+                // Player is in DB — show as registered immediately
                 showRegistered();
             } else {
-                // Server doesn't know about this player — re-register silently
-                await registerWithServer(existing);
-                showRegistered();
+                // Player NOT in DB — show activate button, require explicit click
+                attachSubscribeHandler(existing);
             }
             return;
         }
 
         // No browser subscription — show subscribe button
-        btn.disabled = false;
-        btn.addEventListener('click', async function() {
-            btn.disabled = true;
-
-            const permission = await Notification.requestPermission();
-            if (permission !== 'granted') {
-                statusEl.textContent = t.permDenied;
-                statusEl.className = 'status error';
-                btn.disabled = false;
-                return;
-            }
-
-            try {
-                const subscription = await registration.pushManager.subscribe({
-                    userVisibleOnly: true,
-                    applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
-                });
-
-                await registerWithServer(subscription);
-                showRegistered();
-            } catch (err) {
-                statusEl.textContent = t.error + err.message;
-                statusEl.className = 'status error';
-                btn.disabled = false;
-            }
-        });
+        attachSubscribeHandler(null);
     } catch (err) {
         statusEl.textContent = t.error + err.message;
         statusEl.className = 'status error';
     }
 }
 
-init();
+// Bootstrap: load translations, then apply, then initialize
+loadI18n().then(function() {
+    applyTranslations();
+    init();
+});

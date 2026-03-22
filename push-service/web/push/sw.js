@@ -2,13 +2,14 @@
 // Native Web Push API — no Firebase
 
 self.addEventListener('push', function(event) {
-    let data = { title: 'TTM', body: 'Neue Nachricht' };
+    let data = { title: 'TTM', body: 'Neue Nachricht', playerId: '' };
 
     if (event.data) {
         try {
             const json = event.data.json();
-            data.title = json.title || 'TTM';
+            data.playerId = json.playerId || '';
             data.body = json.body || json.message || event.data.text();
+            data.title = data.playerId ? ('TTM - ' + data.playerId) : (json.title || 'TTM');
         } catch (e) {
             data.body = event.data.text();
         }
@@ -20,7 +21,12 @@ self.addEventListener('push', function(event) {
         badge: '/push/icon-192.png',
         vibrate: [200, 100, 200],
         tag: 'ttm-push-' + Date.now(),
-        data: { url: self.registration.scope }
+        data: {
+            url: data.playerId
+                ? (self.registration.scope + '?player=' + data.playerId)
+                : self.registration.scope,
+            playerId: data.playerId
+        }
     };
 
     event.waitUntil(
@@ -33,7 +39,8 @@ self.addEventListener('push', function(event) {
                         client.postMessage({
                             type: 'push-message',
                             title: data.title,
-                            message: data.body
+                            message: data.body,
+                            playerId: data.playerId
                         });
                     });
                 })
@@ -44,9 +51,20 @@ self.addEventListener('push', function(event) {
 self.addEventListener('notificationclick', function(event) {
     event.notification.close();
 
+    var targetUrl = event.notification.data.url || '/push/';
+    var targetPlayerId = event.notification.data.playerId || '';
+
     event.waitUntil(
         self.clients.matchAll({ type: 'window' }).then(function(clients) {
-            // Focus existing window if available
+            // Prefer window with matching player
+            if (targetPlayerId) {
+                for (var i = 0; i < clients.length; i++) {
+                    if (clients[i].url.includes('player=' + targetPlayerId) && 'focus' in clients[i]) {
+                        return clients[i].focus();
+                    }
+                }
+            }
+            // Fallback: any window with /push/
             for (var i = 0; i < clients.length; i++) {
                 if (clients[i].url.includes('/push/') && 'focus' in clients[i]) {
                     return clients[i].focus();
@@ -54,7 +72,7 @@ self.addEventListener('notificationclick', function(event) {
             }
             // Otherwise open new window
             if (self.clients.openWindow) {
-                return self.clients.openWindow(event.notification.data.url || '/push/');
+                return self.clients.openWindow(targetUrl);
             }
         })
     );

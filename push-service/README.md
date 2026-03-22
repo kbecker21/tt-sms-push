@@ -26,7 +26,7 @@ vapid.public.key=BASE64URL_PUBLIC_KEY
 vapid.private.key=BASE64URL_PRIVATE_KEY
 ```
 
-Den **Public Key** zusätzlich in `web/push/app.js` eintragen:
+Den **Public Key** zusätzlich in `web/push/app.js` (Zeile 2) eintragen:
 ```javascript
 const VAPID_PUBLIC_KEY = 'BASE64URL_PUBLIC_KEY';
 ```
@@ -44,17 +44,28 @@ Der Server ist erreichbar unter: `http://localhost:8080/push/`
 
 ## Lokaler Test
 
-PWA öffnen:
+PWA öffnen (mit Spielernummer):
 ```
 http://localhost:8080/push/?player=TEST01
 ```
 
-Push senden per curl:
+Oder ohne Spielernummer (Eingabefeld wird angezeigt):
+```
+http://localhost:8080/push/
+```
+
+Push senden per curl (Git Bash):
 ```bash
 curl -X POST http://localhost:8080/api/push/send \
   -H "Authorization: Bearer changeme" \
   -H "Content-Type: application/json" \
   -d '{"playerId": "TEST01", "message": "Ergebnis: Mueller 3:1 Schmidt"}'
+```
+
+Push senden per curl (PowerShell):
+```powershell
+$body = '{"playerId":"TEST01","message":"Ergebnis: Mueller 3:1 Schmidt"}'
+curl.exe -X POST http://localhost:8080/api/push/send -H "Authorization: Bearer changeme" -H "Content-Type: application/json" -d $body
 ```
 
 ## Deployment (ttm.co.at)
@@ -73,11 +84,15 @@ location /api/push/ {
 
 ### QR-Code URL Format
 
+Spielerspezifisch:
 ```
 https://www.ttm.co.at/push/?player={spielernummer}
 ```
 
-Beispiel: `https://www.ttm.co.at/push/?player=2001`
+Universell (Spieler gibt Nummer selbst ein):
+```
+https://www.ttm.co.at/push/
+```
 
 ## API-Dokumentation
 
@@ -117,6 +132,19 @@ Response:
     "timestamp": "Mon 14:30 CET"
 }
 ```
+
+Push-Payload an den Browser enthält die `playerId` für spielerspezifische Zustellung:
+```json
+{"playerId": "2001", "message": "Ergebnis: Mueller 3:1 Schmidt"}
+```
+
+### GET /api/push/status (kein Auth)
+
+Prüft Server-seitige Registrierung: `GET /api/push/status?playerId=2001&endpoint=...`
+
+### POST /api/push/unregister (kein Auth)
+
+Meldet einen Spieler ab (löscht nur den DB-Eintrag, nicht die Browser-Subscription).
 
 ## Datenbank
 
