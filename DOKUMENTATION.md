@@ -630,8 +630,14 @@ Der Service Worker (`sw.js`) läuft als Hintergrundprozess im Browser:
   Nachricht dem richtigen Spieler zu
 - **Benachrichtigungen**: Zeigt Windows-/System-Notifications an mit Spieler-Kennung
   im Titel (z.B. "TTM - TEST01"), Icon, Vibration und Ton
+- **Offline-Speicherung**: Speichert jede eingehende Nachricht in IndexedDB
+  (DB: `ttm-push-messages`), damit sie auch dann verfügbar ist, wenn kein Tab für
+  den betreffenden Spieler geöffnet ist. Beim Öffnen eines Tabs werden die
+  zwischengespeicherten Nachrichten abgerufen und aus IndexedDB gelöscht.
 - **Weiterleitung**: Leitet empfangene Nachrichten inkl. `playerId` an offene Tabs weiter.
-  Jeder Tab filtert und zeigt nur Nachrichten für "seinen" Spieler an
+  Jeder offene Tab speichert Nachrichten für alle Spieler in localStorage (nicht nur
+  für den eigenen), sodass bei Mehrspieler-Szenarien keine Nachrichten verloren gehen.
+  Die Anzeige im Tab erfolgt weiterhin nur für den eigenen Spieler.
 - **Klick-Handling**: Beim Klick auf eine Notification wird bevorzugt der Tab des
   betroffenen Spielers fokussiert, oder ein neuer mit der passenden Spieler-URL geöffnet
 
@@ -1073,13 +1079,17 @@ den push-service per curl anspricht (siehe Abschnitt 6.1, Schritt 4).
 │                                                                      │
 │  Service Worker (sw.js)                                              │
 │  12. Empfängt Push-Event                                            │
-│  13. Zeigt System-Notification an (mit Icon, Text, Vibration)      │
-│  14. Leitet Nachricht an offene Tabs weiter                        │
+│  13. Speichert Nachricht in IndexedDB (Offline-Puffer)             │
+│  14. Zeigt System-Notification an (mit Icon, Text, Vibration)      │
+│  15. Leitet Nachricht an offene Tabs weiter                        │
 │                                                                      │
 │  PWA (app.js)                                                        │
-│  15. Empfängt Nachricht vom Service Worker                          │
-│  16. Speichert in localStorage (letzte 50 Nachrichten)             │
-│  17. Zeigt in der Nachrichtenliste an                               │
+│  16. Empfängt Nachricht vom Service Worker                          │
+│  17. Speichert in localStorage für ALLE Spieler (letzte 50/Spieler)│
+│  18. Zeigt in der Nachrichtenliste an                               │
+│  --- Beim Öffnen eines Tabs ---                                     │
+│  19. Fragt verpasste Nachrichten vom SW ab (aus IndexedDB)         │
+│  20. Mergt sie in localStorage und zeigt sie an                     │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -1184,8 +1194,10 @@ nssm start PushService
 
 - **Ein SW pro Scope**: Alle Tabs unter `/push/` teilen denselben Service Worker.
   Mehrere Spieler im selben Browser teilen denselben Push-Endpoint. Der Service Worker
-  empfängt alle Nachrichten und leitet sie mit der `playerId` an alle offenen Tabs weiter.
-  Jeder Tab filtert dann und zeigt nur die Nachrichten für "seinen" Spieler an.
+  empfängt alle Nachrichten, speichert sie in IndexedDB und leitet sie an alle offenen
+  Tabs weiter. Jeder offene Tab speichert Nachrichten für alle Spieler in localStorage
+  (nicht nur für den eigenen). Die Anzeige erfolgt weiterhin nur für den eigenen Spieler.
+  Beim Öffnen eines Tabs werden verpasste Nachrichten aus IndexedDB abgerufen.
   Windows-Notifications zeigen die Spielernummer im Titel, damit erkennbar ist,
   für wen die Nachricht bestimmt ist.
 
@@ -1207,6 +1219,12 @@ nssm start PushService
 - TTL (Time to Live): 24 Stunden (konfiguriert im `WebPushService.java`)
 - Nachrichten, die älter als 24h sind, verfallen
 - Beim nächsten Online-Gang des Browsers werden zwischengespeicherte Nachrichten zugestellt
+- **Zweistufige lokale Zwischenspeicherung**:
+  1. Wenn ein anderer Spieler-Tab offen ist, speichert dieser die Nachricht in localStorage
+     für den richtigen Spieler mit (sofort verfügbar beim nächsten Tab-Öffnen)
+  2. Zusätzlich speichert der Service Worker jede Nachricht in IndexedDB. Beim Öffnen
+     eines Tabs werden verpasste Nachrichten abgerufen und in die Nachrichtenliste gemergt.
+     Dies funktioniert auch wenn gar kein Tab geöffnet war.
 
 ### Datenspeicherung im Browser
 
@@ -1214,6 +1232,7 @@ nssm start PushService
 |------------|--------|-------------|
 | Push-Subscription | Endpoint + Keys | F12 → Application → Service Workers → Push |
 | Local Storage | Nachrichtenliste | F12 → Application → Local Storage → `push_messages_*` |
+| IndexedDB | Offline-Nachrichtenpuffer | F12 → Application → IndexedDB → `ttm-push-messages` |
 | Service Worker | Registrierung | `chrome://serviceworker-internals/` |
 
 ### Sicherheitshinweise

@@ -1,6 +1,82 @@
 // Service Worker for TTM Push Notifications
 // Native Web Push API — no Firebase
 
+// --- IndexedDB helpers for offline message storage ---
+
+function openMessagesDB() {
+    return new Promise(function(resolve, reject) {
+        var request = indexedDB.open('ttm-push-messages', 1);
+        request.onupgradeneeded = function(event) {
+            var db = event.target.result;
+            if (!db.objectStoreNames.contains('messages')) {
+                var store = db.createObjectStore('messages', { keyPath: 'id', autoIncrement: true });
+                store.createIndex('playerId', 'playerId', { unique: false });
+            }
+        };
+        request.onsuccess = function(event) { resolve(event.target.result); };
+        request.onerror = function(event) { reject(event.target.error); };
+    });
+}
+
+function storeMessage(playerId, message) {
+    return openMessagesDB().then(function(db) {
+        return new Promise(function(resolve, reject) {
+            var tx = db.transaction('messages', 'readwrite');
+            tx.objectStore('messages').add({
+                playerId: playerId,
+                text: message,
+                time: new Date().toISOString()
+            });
+            tx.oncomplete = function() { resolve(); };
+            tx.onerror = function(event) { reject(event.target.error); };
+        });
+    });
+}
+
+function getAndDeleteMessages(playerId) {
+    return openMessagesDB().then(function(db) {
+        return new Promise(function(resolve, reject) {
+            var tx = db.transaction('messages', 'readwrite');
+            var store = tx.objectStore('messages');
+            var index = store.index('playerId');
+            var results = [];
+            var request = index.openCursor(IDBKeyRange.only(playerId));
+            request.onsuccess = function(event) {
+                var cursor = event.target.result;
+                if (cursor) {
+                    results.push({ text: cursor.value.text, time: cursor.value.time });
+                    cursor.delete();
+                    cursor.continue();
+                }
+            };
+            tx.oncomplete = function() { resolve(results); };
+            tx.onerror = function(event) { reject(event.target.error); };
+        });
+    });
+}
+
+function clearMessagesForPlayer(playerId) {
+    return openMessagesDB().then(function(db) {
+        return new Promise(function(resolve, reject) {
+            var tx = db.transaction('messages', 'readwrite');
+            var store = tx.objectStore('messages');
+            var index = store.index('playerId');
+            var request = index.openCursor(IDBKeyRange.only(playerId));
+            request.onsuccess = function(event) {
+                var cursor = event.target.result;
+                if (cursor) {
+                    cursor.delete();
+                    cursor.continue();
+                }
+            };
+            tx.oncomplete = function() { resolve(); };
+            tx.onerror = function(event) { reject(event.target.error); };
+        });
+    });
+}
+
+// --- Push event handler ---
+
 self.addEventListener('push', function(event) {
     let data = { title: 'TTM', body: 'Neue Nachricht', playerId: '' };
 
@@ -32,6 +108,8 @@ self.addEventListener('push', function(event) {
     event.waitUntil(
         Promise.all([
             self.registration.showNotification(data.title, options),
+            // Store message in IndexedDB for offline retrieval
+            data.playerId ? storeMessage(data.playerId, data.body) : Promise.resolve(),
             // Forward to open clients
             self.clients.matchAll({ type: 'window', includeUncontrolled: true })
                 .then(function(clients) {
@@ -47,6 +125,30 @@ self.addEventListener('push', function(event) {
         ])
     );
 });
+
+// --- Message handler: tabs can request missed messages ---
+
+self.addEventListener('message', function(event) {
+    if (!event.data) return;
+
+    if (event.data.type === 'get-messages' && event.data.playerId) {
+        event.waitUntil(
+            getAndDeleteMessages(event.data.playerId).then(function(messages) {
+                event.source.postMessage({
+                    type: 'missed-messages',
+                    playerId: event.data.playerId,
+                    messages: messages
+                });
+            })
+        );
+    }
+
+    if (event.data.type === 'clear-messages' && event.data.playerId) {
+        event.waitUntil(clearMessagesForPlayer(event.data.playerId));
+    }
+});
+
+// --- Notification click handler ---
 
 self.addEventListener('notificationclick', function(event) {
     event.notification.close();

@@ -1,3 +1,46 @@
+# Release Notes — push-service v3 (2026-03-23)
+
+## Bugfixes
+
+### Verpasste Nachrichten bei Multi-Player-Szenario (Kritisch)
+Wenn mehrere Spieler im selben Browser registriert waren und ein Spieler-Tab geschlossen
+wurde, gingen Nachrichten für diesen Spieler verloren. Beim erneuten Öffnen des Tabs
+war die Nachrichtenliste leer, obwohl Nachrichten gesendet wurden.
+
+**Ursache**: Jeder Tab speicherte nur Nachrichten für "seinen" Spieler und ignorierte
+Nachrichten für andere Spieler. Wenn kein passender Tab offen war, ging die Nachricht
+verloren, weil der Service Worker sie nicht zwischenspeicherte.
+
+**Lösung (zweistufig)**:
+1. Jeder offene Tab speichert jetzt Nachrichten für **alle** Spieler in localStorage
+   (nicht nur für den eigenen). So geht keine Nachricht verloren, solange mindestens
+   ein Tab offen ist.
+2. Der Service Worker speichert zusätzlich jede eingehende Nachricht in IndexedDB.
+   Beim Öffnen eines Tabs werden verpasste Nachrichten aus IndexedDB abgerufen,
+   in die Nachrichtenliste gemergt und aus IndexedDB gelöscht. Dies funktioniert
+   auch wenn gar kein Tab geöffnet war.
+
+**Geänderte Dateien**: `sw.js`, `app.js`
+
+## Geänderte Dateien (Zusammenfassung)
+
+| Datei | Änderung |
+|-------|----------|
+| `sw.js` | IndexedDB-Funktionen für Offline-Nachrichtenpuffer, Speicherung bei jedem Push-Event, neuer `message`-Listener für Tab-Anfragen |
+| `app.js` | Nachrichten für alle Spieler in localStorage speichern, verpasste Nachrichten beim Tab-Öffnen vom SW abrufen, IndexedDB-Cleanup beim Löschen |
+
+## Dokumentation aktualisiert
+
+- `DOKUMENTATION.md` — Abschnitte 5.2 (Service Worker), 9.1 (Gesamtablauf), 11 (Offline-Nachrichten, Datenspeicherung) aktualisiert
+
+## Hinweise zum Update
+
+**Wichtig**: Nach dem Update müssen Spieler im Browser **Ctrl+F5** drücken
+(oder den Service Worker in den DevTools deregistrieren), damit die aktualisierte
+`sw.js` geladen wird. Die IndexedDB wird beim ersten Push automatisch angelegt.
+
+---
+
 # Release Notes — push-service v2 (2026-03-22)
 
 ## Bugfixes

@@ -84,26 +84,55 @@ function loadMessages() {
 
 function clearMessages() {
     localStorage.removeItem('push_messages_' + playerId);
+    // Also clear messages in SW IndexedDB
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+            type: 'clear-messages',
+            playerId: playerId
+        });
+    }
     loadMessages();
 }
 
-// Listen for messages from service worker (foreground)
+// Listen for messages from service worker (foreground + missed messages)
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', function(event) {
-        if (event.data && event.data.type === 'push-message') {
-            // Only process messages for THIS player (ignore messages for other players)
-            if (event.data.playerId && event.data.playerId !== playerId) {
-                return;
-            }
-            const messages = JSON.parse(localStorage.getItem('push_messages_' + playerId) || '[]');
+        if (!event.data) return;
+
+        if (event.data.type === 'push-message') {
+            // Store message for the correct player (even if it's not THIS tab's player)
+            var msgPlayerId = event.data.playerId || playerId;
+            var messages = JSON.parse(localStorage.getItem('push_messages_' + msgPlayerId) || '[]');
             messages.unshift({
                 text: event.data.message,
                 time: new Date().toLocaleTimeString()
             });
             // Keep last 50 messages
             if (messages.length > 50) messages.length = 50;
-            localStorage.setItem('push_messages_' + playerId, JSON.stringify(messages));
-            loadMessages();
+            localStorage.setItem('push_messages_' + msgPlayerId, JSON.stringify(messages));
+            // Only update UI if this message is for THIS player
+            if (msgPlayerId === playerId) {
+                loadMessages();
+            }
+        }
+
+        if (event.data.type === 'missed-messages' && event.data.playerId === playerId) {
+            // Merge missed messages from IndexedDB into localStorage
+            if (event.data.messages && event.data.messages.length > 0) {
+                var messages = JSON.parse(localStorage.getItem('push_messages_' + playerId) || '[]');
+                var existingTexts = {};
+                messages.forEach(function(m) { existingTexts[m.time + '|' + m.text] = true; });
+                event.data.messages.forEach(function(msg) {
+                    var time = new Date(msg.time).toLocaleTimeString();
+                    var key = time + '|' + msg.text;
+                    if (!existingTexts[key]) {
+                        messages.unshift({ text: msg.text, time: time });
+                    }
+                });
+                if (messages.length > 50) messages.length = 50;
+                localStorage.setItem('push_messages_' + playerId, JSON.stringify(messages));
+                loadMessages();
+            }
         }
     });
 }
@@ -270,6 +299,14 @@ async function init() {
     try {
         const registration = await navigator.serviceWorker.register('/push/sw.js', { scope: '/push/' });
         await navigator.serviceWorker.ready;
+
+        // Request missed messages from SW (stored in IndexedDB while tab was closed)
+        if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({
+                type: 'get-messages',
+                playerId: playerId
+            });
+        }
 
         // Check existing browser subscription
         const existing = await registration.pushManager.getSubscription();
