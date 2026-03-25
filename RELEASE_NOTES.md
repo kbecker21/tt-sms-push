@@ -1,3 +1,79 @@
+# Release Notes — v4 (2026-03-25): SMSCenterExt ↔ push-service Integration
+
+## Bugfixes
+
+### SMSLib Outbound-Routing für PushHTTPGateway (Kritisch)
+
+Nachrichten, die im SMSCenter erstellt und in `smsserver_out` mit Status `U` (Unsent) gespeichert
+wurden, wurden nicht an den push-service weitergeleitet. Die Methode `PushHTTPGateway.sendMessage()`
+wurde nie aufgerufen.
+
+**Ursache**: SMSLib v3 verwendet ein internes Bitfeld `attributes` in der Basisklasse `AGateway`,
+das steuert, ob `setOutbound(true)` tatsächlich wirkt:
+```java
+// AGateway.setOutbound() — vereinfacht:
+public void setOutbound(boolean value) {
+    if ((this.attributes & 1) != 0) {   // Bit 0 = Outbound-Fähigkeit
+        this.outbound = value;
+    }
+    // Wenn Bit 0 nicht gesetzt → Aufruf wird STILL IGNORIERT
+}
+```
+Der Konstruktor `AGateway(String id)` setzt `attributes = 0`. Dadurch war `setOutbound(true)`
+in `PushGateway.create()` wirkungslos, das Gateway blieb intern als `outbound = false` markiert,
+und der SMSLib-Router (`Router.preroute()`) fand kein passendes Gateway für den Versand.
+
+**Ablaufkette des Fehlers**:
+```
+OutboundPollingThread → sendMessages() → Router.preroute()
+    → prüft für jedes Gateway: isOutbound() && getStatus() == STARTED
+    → PushHTTPGateway.isOutbound() gibt false zurück (wegen attributes-Bug)
+    → Kein Gateway-Kandidat → routeMessage() gibt null zurück
+    → Nachricht bleibt mit Status "U" in der Datenbank
+```
+
+**Lösung**: Im Konstruktor von `PushHTTPGateway` wird jetzt `setAttributes(getAttributes() | 1)`
+aufgerufen, um das Outbound-Bit explizit zu setzen, bevor `setOutbound(true)` aufgerufen wird.
+
+**Geänderte Datei**: `SMSCenterExt/src/smscenter/smsserver/gateways/PushHTTPGateway.java`
+
+### Kotlin-Laufzeitabhängigkeit für OkHttp (Kritisch)
+
+Beim Start des SMS-Servers trat folgender Fehler auf:
+```
+java.lang.NoClassDefFoundError: kotlin/jvm/internal/Intrinsics
+    at okhttp3.MediaType$Companion.get(MediaType.kt)
+    at smscenter.smsserver.gateways.PushHTTPGateway.<clinit>(PushHTTPGateway.java:34)
+```
+
+**Ursache**: OkHttp 4.x ist in Kotlin geschrieben und benötigt `kotlin-stdlib` als
+Laufzeitabhängigkeit. Ivy löst diese transitiv auf, die JARs (`kotlin-stdlib-1.9.10.jar` etc.)
+landen in `lib/`, werden aber bei einem `Clean and Build` in NetBeans automatisch nach
+`dist/lib/` kopiert — vorausgesetzt der Build wird vollständig ausgeführt.
+
+**Lösung**: Ein vollständiger `Clean and Build` in NetBeans (Shift+F11) oder `ant clean jar`
+stellt sicher, dass alle transitiven Abhängigkeiten korrekt in `dist/lib/` kopiert werden.
+Die Kotlin-JARs sind bereits in `lib/` vorhanden und erfordern keine manuellen Schritte.
+
+## Geänderte Dateien (Zusammenfassung)
+
+| Datei | Änderung |
+|-------|----------|
+| `PushHTTPGateway.java` | `setAttributes(getAttributes() \| 1)` im Konstruktor — aktiviert Outbound-Bit |
+
+## Dokumentation aktualisiert
+
+- `DOKUMENTATION.md` — Abschnitte 7.2 (Dependencies), 7.6 (Technischer Hintergrund: SMSLib-Integration), 8 (Testen), 9.2 (Integrations-Checkliste), 11 (Troubleshooting) erweitert
+- `RELEASE_NOTES.md` — Diesen Eintrag hinzugefügt
+
+## Hinweise zum Update
+
+1. **SMSCenterExt**: Vollständigen `Clean and Build` in NetBeans ausführen (Shift+F11)
+2. **push-service**: Keine Änderungen nötig
+3. **Browser**: Keine Änderungen nötig
+
+---
+
 # Release Notes — push-service v3 (2026-03-23)
 
 ## Bugfixes

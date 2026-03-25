@@ -44,6 +44,9 @@ public class PushHTTPGateway extends org.smslib.AGateway
 	public PushHTTPGateway(String id, String serviceUrl, String apiKey)
 	{
 		super(id);
+		// Enable outbound capability flag in SMSLib's attribute bitmask.
+		// Without this, setOutbound(true) is silently ignored by AGateway.
+		setAttributes(getAttributes() | 1);
 		this.serviceUrl = serviceUrl.endsWith("/") ? serviceUrl.substring(0, serviceUrl.length() - 1) : serviceUrl;
 		this.apiKey = apiKey;
 		this.httpClient = new OkHttpClient.Builder()

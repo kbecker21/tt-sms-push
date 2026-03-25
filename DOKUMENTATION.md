@@ -3,7 +3,7 @@
 Dieses Dokument beschreibt Einrichtung, Konfiguration, Test und Betrieb der beiden
 Projekte **push-service** (Web-Push-Server) und **SMSCenterExt** (SMS-Gateway mit Push-Erweiterung).
 
-Stand: 2026-03-22
+Stand: 2026-03-25
 
 ---
 
@@ -45,6 +45,7 @@ Stand: 2026-03-22
    - 7.3 [Bauen](#73-bauen)
    - 7.4 [Push-Gateway konfigurieren](#74-push-gateway-konfigurieren)
    - 7.5 [Empfänger-Zuordnung (Telefonnummer → Spielernummer)](#75-empfänger-zuordnung-telefonnummer--spielernummer)
+   - 7.6 [Technischer Hintergrund: SMSLib-Integration](#76-technischer-hintergrund-smslib-integration)
 8. [SMSCenterExt — Testen](#8-smscenterext--testen)
 9. [Zusammenspiel beider Projekte](#9-zusammenspiel-beider-projekte)
    - 9.1 [Gesamtablauf einer Push-Nachricht](#91-gesamtablauf-einer-push-nachricht)
@@ -936,6 +937,12 @@ SMSCenterExt/
 | org.jsmpp:jsmpp | 2.3.11 | SMPP-Gateway (SMS-Versand) |
 | com.squareup.okhttp3:okhttp | 4.12.0 | HTTP-Client für Push-Gateway |
 | com.google.code.gson:gson | 2.11.0 | JSON für Push-Gateway |
+| org.jetbrains.kotlin:kotlin-stdlib | 1.9.10 | **Transitive Abhängigkeit** von OkHttp 4.x (automatisch via Ivy) |
+
+> **Hinweis OkHttp + Kotlin**: OkHttp 4.x ist in Kotlin geschrieben und benötigt `kotlin-stdlib`
+> zur Laufzeit. Ivy löst diese Abhängigkeit automatisch transitiv auf. Falls nach einem Build der
+> Fehler `NoClassDefFoundError: kotlin/jvm/internal/Intrinsics` auftritt, wurde der Build nicht
+> vollständig ausgeführt. Lösung: `Clean and Build` in NetBeans (Shift+F11) oder `ant clean jar`.
 
 ### 7.3 Bauen
 
@@ -1003,33 +1010,133 @@ SMSCenter-Verwaltung.
 **Fallback**: Wenn keine Spielernummer gefunden wird, wird die Telefonnummer
 als `playerId` verwendet (und eine Warnung geloggt).
 
+### 7.6 Technischer Hintergrund: SMSLib-Integration
+
+Das `PushHTTPGateway` ist als SMSLib-Gateway implementiert und wird in die bestehende
+Nachrichtenverarbeitung des SMSServers eingefügt. Das Verständnis der internen Abläufe
+ist hilfreich bei der Fehlersuche.
+
+#### Gateway-Registrierung beim Start
+
+```
+SMSServer.loadConfiguration()
+  → Liest gateway.0=PushGateway, PushGateway, outbound aus Properties
+  → Erstellt PushGateway-Instanz via Reflection
+  → PushGateway.create():
+      → PushHTTPGateway(id, serviceUrl, apiKey)
+      → setAttributes(getAttributes() | 1)    ← Outbound-Bit aktivieren
+      → setOutbound(true)                     ← Jetzt wirksam
+  → Service.getInstance().addGateway(pushGateway)
+
+Service.startService()
+  → Für jedes Gateway: gateway.startGateway()
+  → PushHTTPGateway.startGateway()
+      → Status wird auf STARTED gesetzt
+      → Gateway-interner QueueManager-Thread startet (Intervall: 500ms)
+```
+
+#### Nachrichtenversand (Outbound-Zyklus)
+
+```
+OutboundPollingThread (Intervall: settings.outbound_interval, default 10s)
+  → SMSServer.sendMessages()
+      1. Prüft: Gibt es mindestens ein outbound Gateway?
+         → Service.getInstance().getGateways() durchlaufen
+         → gateway.isOutbound() muss true sein
+      2. Holt Nachrichten aus allen outbound Interfaces:
+         → Database.getMessagesToSend()
+         → SELECT ... FROM smsserver_out WHERE status = 'U'
+         → Setzt Status auf 'Q' (Queued)
+      3. Für jede Nachricht:
+         → Service.getInstance().sendMessage(msg)  [sync-Modus]
+           oder Service.getInstance().queueMessage(msg) [async-Modus]
+
+Service.sendMessage(msg):
+  → routeMessage(msg):
+      → Router.preroute(): Filtert Gateways nach
+        - isOutbound() == true
+        - getStatus() == STARTED
+        - gatewayId matches ("*" = alle, sonst spezifisch)
+      → LoadBalancer.balance(): Wählt ein Gateway (RoundRobin)
+  → gateway.sendMessage(msg)
+      → PushHTTPGateway.sendMessage()
+        → resolvePlayerId(phone) → plNr via DB-Lookup
+        → HTTP POST an push-service /api/push/send
+```
+
+#### Das `attributes`-Bitfeld
+
+SMSLib verwendet ein internes `attributes`-Feld als Schutzmaske:
+
+| Bit | Wert | Bedeutung | Methode die es schützt |
+|-----|------|-----------|----------------------|
+| 0 | 1 | Outbound erlaubt | `setOutbound()` |
+| 1 | 2 | Inbound erlaubt | `setInbound()` |
+
+`setOutbound(true)` prüft `(attributes & 1) != 0`. Wenn Bit 0 nicht gesetzt ist,
+wird der Aufruf **ohne Fehlermeldung ignoriert**. Modem-Gateways setzen `attributes`
+im Konstruktor passend; das PushHTTPGateway muss dies mit
+`setAttributes(getAttributes() | 1)` explizit tun.
+
 ---
 
 ## 8. SMSCenterExt — Testen
 
-### Voraussetzung
+### Voraussetzungen
 
-Der push-service muss laufen und mindestens ein Spieler muss im Browser registriert sein.
+1. push-service muss laufen
+2. Mindestens ein Spieler muss im Browser registriert sein
+3. SMSCenterExt muss mit `Clean and Build` neu gebaut worden sein (damit Kotlin-JARs
+   und der `attributes`-Fix in `dist/lib/` vorhanden sind)
 
-### Test-Szenario
+### Test-Szenario: Kompletter Durchlauf
 
-1. **push-service starten** und Spieler `2001` im Browser registrieren
-
-2. **In der Datenbank** sicherstellen, dass die Zuordnung existiert:
-   ```sql
-   -- Prüfen, ob die Telefonnummer-Zuordnung vorhanden ist
-   SELECT plNr, phone FROM smscenter_phones WHERE plNr = '2001';
+1. **push-service starten**
+   ```bash
+   cd push-service
+   ant run
    ```
 
-3. **SMSCenterExt starten** mit konfiguriertem Push-Gateway
+2. **Spieler im Browser registrieren**
+   - Browser öffnen: `http://localhost:8080/push/?player=1`
+   - Auf "Aktivieren" klicken → Notification-Berechtigung erteilen
 
-4. **Nachricht senden**: Im SMSCenter eine Nachricht an den Spieler schicken
-   (z.B. Spielergebnis)
+3. **Telefonnummer-Zuordnung prüfen**
+   ```sql
+   SELECT plNr, phone FROM smscenter_phones WHERE plNr = '1';
+   -- Sollte z.B. liefern: plNr=1, phone=+49170123456789
+   ```
 
-5. **Prüfen**:
-   - In der SMSCenter-Konsole/Log: Gateway-Meldung "Push sent successfully"
-   - Im Browser: Notification und Nachricht in der Liste
-   - Im push-service-Log: `INFO SendHandler:117 - Push sent to player 2001: 1/1 devices`
+4. **SMSCenterExt starten** mit konfiguriertem Push-Gateway:
+   - Service URL: `http://localhost:8080`
+   - API Key: muss mit `push.api.key` in `push-service.properties` übereinstimmen
+   - Outbound: `yes`
+
+5. **SMS Server starten** (im SMSCenterExt Menü)
+
+6. **Nachricht senden**: Menü Tools → Send SMS
+   - Receiver: Startnummer des Spielers (z.B. `1`)
+   - Text: `Test Push Service`
+   - OK klicken
+
+7. **Prüfen**:
+   - In `smsserver_out`: Status wechselt von `U` → `Q` → `S` (Sent)
+   - In der SMSCenter-Konsole: `Push sent to player 1 (recipient: +49170123456789), sent: 1`
+   - Im push-service-Log: `Push sent to player 1: 1/1 devices`
+   - Im Browser: System-Notification erscheint, Nachricht in der Liste sichtbar
+
+### Fehlersuche beim Integrationstest
+
+Falls der Status in `smsserver_out` auf `U` stehen bleibt:
+
+| Symptom | Mögliche Ursache | Lösung |
+|---------|-----------------|--------|
+| Status bleibt `U`, kein Log-Output | Gateway nicht als outbound erkannt | `Clean and Build` ausführen, damit `setAttributes`-Fix aktiv ist |
+| `NoClassDefFoundError: kotlin/...` | Kotlin-JARs fehlen in dist/lib | `Clean and Build` (Shift+F11) — kopiert alle JARs nach dist/lib |
+| Status wird `F` (Failed) | push-service nicht erreichbar | Service URL und Port prüfen, Firewall prüfen |
+| Status wird `F`, Log zeigt "HTTP 401" | API Key stimmt nicht überein | `apiKey` in SMSCenter == `push.api.key` in push-service.properties |
+| Status wird `S`, aber keine Notification | Spieler nicht für Push registriert | Browser-Tab prüfen, erneut registrieren |
+| Log zeigt "No player found for phone" | Telefonnr nicht in smscenter_phones | Zuordnung in der Datenbank anlegen |
 
 ### Manueller Test ohne SMSCenter
 
@@ -1047,13 +1154,14 @@ den push-service per curl anspricht (siehe Abschnitt 6.1, Schritt 4).
 │                                                                      │
 │  SMSCenterExt Desktop-App                                           │
 │  1. Ergebnis wird eingetragen (z.B. Mueller 3:1 Schmidt)           │
-│  2. SMSCenter ruft Database.sendMessage() auf                       │
-│  3. Telefonnummer des Spielers wird aus smscenter_phones gelesen    │
-│  4. Nachricht wird an PushHTTPGateway übergeben                     │
+│  2. Nachricht wird in smsserver_out gespeichert (Status: U)        │
+│  3. OutboundPollingThread holt Nachricht (Status → Q)              │
+│  4. SMSLib Router findet PushHTTPGateway (outbound + STARTED)      │
+│  5. Telefonnummer des Spielers wird aus smscenter_phones gelesen    │
 │                                                                      │
-│  PushHTTPGateway                                                     │
-│  5. resolvePlayerId(): +436991234567 → "2001"                      │
-│  6. HTTP POST an push-service: /api/push/send                       │
+│  PushHTTPGateway.sendMessage()                                       │
+│  6. resolvePlayerId(): +436991234567 → "2001"                      │
+│  7. HTTP POST an push-service: /api/push/send                       │
 │     mit Bearer-Token und {playerId: "2001", message: "..."}        │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
@@ -1061,35 +1169,35 @@ den push-service per curl anspricht (siehe Abschnitt 6.1, Schritt 4).
 ┌─ push-service (Server) ────────────────────────────────────────────┐
 │                                                                      │
 │  SendHandler                                                         │
-│  7. Bearer-Token prüfen                                             │
-│  8. Alle Geräte für Spieler 2001 aus DB laden                      │
-│  9. Für jedes Gerät:                                                │
-│     a) Nachricht mit AES-128-GCM verschlüsseln (RFC 8291)         │
-│     b) VAPID JWT erstellen (RFC 8292)                               │
-│     c) HTTP POST an den Push-Endpoint des Browsers                  │
-│        (z.B. https://fcm.googleapis.com/fcm/send/...)              │
+│  8. Bearer-Token prüfen                                             │
+│  9. Alle Geräte für Spieler 2001 aus DB laden                      │
+│  10. Für jedes Gerät:                                               │
+│      a) Nachricht mit AES-128-GCM verschlüsseln (RFC 8291)        │
+│      b) VAPID JWT erstellen (RFC 8292)                              │
+│      c) HTTP POST an den Push-Endpoint des Browsers                 │
+│         (z.B. https://fcm.googleapis.com/fcm/send/...)             │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
                               ↓ Web Push Protocol (RFC 8030)
 ┌─ Browser des Spielers ─────────────────────────────────────────────┐
 │                                                                      │
 │  Push-Dienst (FCM/Mozilla Push Service)                             │
-│  10. Entschlüsselt die Nachricht                                    │
-│  11. Leitet sie an den Service Worker weiter                        │
+│  11. Entschlüsselt die Nachricht                                    │
+│  12. Leitet sie an den Service Worker weiter                        │
 │                                                                      │
 │  Service Worker (sw.js)                                              │
-│  12. Empfängt Push-Event                                            │
-│  13. Speichert Nachricht in IndexedDB (Offline-Puffer)             │
-│  14. Zeigt System-Notification an (mit Icon, Text, Vibration)      │
-│  15. Leitet Nachricht an offene Tabs weiter                        │
+│  13. Empfängt Push-Event                                            │
+│  14. Speichert Nachricht in IndexedDB (Offline-Puffer)             │
+│  15. Zeigt System-Notification an (mit Icon, Text, Vibration)      │
+│  16. Leitet Nachricht an offene Tabs weiter                        │
 │                                                                      │
 │  PWA (app.js)                                                        │
-│  16. Empfängt Nachricht vom Service Worker                          │
-│  17. Speichert in localStorage für ALLE Spieler (letzte 50/Spieler)│
-│  18. Zeigt in der Nachrichtenliste an                               │
+│  17. Empfängt Nachricht vom Service Worker                          │
+│  18. Speichert in localStorage für ALLE Spieler (letzte 50/Spieler)│
+│  19. Zeigt in der Nachrichtenliste an                               │
 │  --- Beim Öffnen eines Tabs ---                                     │
-│  19. Fragt verpasste Nachrichten vom SW ab (aus IndexedDB)         │
-│  20. Mergt sie in localStorage und zeigt sie an                     │
+│  20. Fragt verpasste Nachrichten vom SW ab (aus IndexedDB)         │
+│  21. Mergt sie in localStorage und zeigt sie an                     │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -1098,16 +1206,26 @@ den push-service per curl anspricht (siehe Abschnitt 6.1, Schritt 4).
 
 Vor dem produktiven Einsatz prüfen:
 
+**push-service:**
 - [ ] VAPID-Keys generiert und in `push-service.properties` UND `app.js` eingetragen
 - [ ] `push.api.key` in `push-service.properties` geändert (nicht mehr "changeme")
-- [ ] Gleicher `apiKey` im SMSCenterExt Push-Gateway konfiguriert
-- [ ] `serviceUrl` im SMSCenterExt korrekt (z.B. `http://localhost:8080` oder `https://www.ttm.co.at`)
 - [ ] Datenbank-Zugangsdaten in `push-service.properties` korrekt
-- [ ] Tabelle `smscenter_phones` ist gepflegt (Spielernummer ↔ Telefonnummer)
 - [ ] Firewall-Port freigegeben
 - [ ] push-service läuft und ist erreichbar
 - [ ] Mindestens ein Spieler hat sich im Browser registriert
-- [ ] Test-Push wurde erfolgreich gesendet und empfangen
+
+**SMSCenterExt:**
+- [ ] `Clean and Build` nach dem Update ausgeführt (Kotlin-JARs + attributes-Fix)
+- [ ] Gleicher `apiKey` im SMSCenterExt Push-Gateway konfiguriert wie `push.api.key`
+- [ ] `serviceUrl` im SMSCenterExt korrekt (z.B. `http://localhost:8080` oder `https://www.ttm.co.at`)
+- [ ] Push-Gateway als Outbound konfiguriert (Checkbox)
+- [ ] Datenbank-Interface konfiguriert (für Telefonnummer → Spielernummer Auflösung)
+- [ ] Tabelle `smscenter_phones` ist gepflegt (Spielernummer ↔ Telefonnummer)
+
+**Integrationstest:**
+- [ ] Test-Nachricht im SMSCenter erstellt
+- [ ] Status in `smsserver_out` wechselt auf `S` (Sent)
+- [ ] Push-Notification erscheint im Browser des Spielers
 
 ---
 
@@ -1234,6 +1352,17 @@ nssm start PushService
 | Local Storage | Nachrichtenliste | F12 → Application → Local Storage → `push_messages_*` |
 | IndexedDB | Offline-Nachrichtenpuffer | F12 → Application → IndexedDB → `ttm-push-messages` |
 | Service Worker | Registrierung | `chrome://serviceworker-internals/` |
+
+### SMSCenterExt-Troubleshooting
+
+| Problem | Ursache | Lösung |
+|---------|---------|--------|
+| `NoClassDefFoundError: kotlin/jvm/internal/Intrinsics` | Kotlin-JARs fehlen im Classpath. OkHttp 4.x benötigt `kotlin-stdlib` zur Laufzeit. | `Clean and Build` in NetBeans (Shift+F11) — Ivy löst Kotlin-JARs transitiv auf, NetBeans kopiert sie nach `dist/lib/`. |
+| Nachricht bleibt auf Status `U` in `smsserver_out` | PushHTTPGateway wird nicht als outbound erkannt (SMSLib `attributes`-Bitfeld). | Sicherstellen, dass der aktuelle Code mit `setAttributes(getAttributes() \| 1)` im PushHTTPGateway-Konstruktor verwendet wird. `Clean and Build` ausführen. |
+| Log: "Push send failed ... HTTP 401" | API Key Mismatch | `apiKey` in SMSCenterExt muss identisch sein mit `push.api.key` in `push-service.properties` |
+| Log: "No player found for phone ..." | Telefonnummer nicht in `smscenter_phones` hinterlegt | Spieler in der SMSCenter-Verwaltung mit Telefonnummer anlegen |
+| Log: "PushHTTPGateway: No database configured" | Kein Database-Interface konfiguriert | In den Einstellungen muss neben dem Push-Gateway auch ein Database-Interface konfiguriert sein (für die Telefonnr→Spielernr-Auflösung) |
+| Nachricht wird gesendet (Status `S`), aber keine Notification | Spieler nicht im Browser registriert, oder Browser geschlossen | push-service-Log prüfen: `sent: 0` = kein Gerät registriert. Spieler muss im Browser auf "Aktivieren" klicken. |
 
 ### Sicherheitshinweise
 
