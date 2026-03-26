@@ -24,10 +24,36 @@ public class PushGatewaySettingsPanel extends SettingsPanel {
 
     @Override
     public void writeProperties(Properties props) {
-        settings.setServiceUrl(serviceUrlTextField.getText());
+        settings.setServiceUrl(normalizeServiceUrl(serviceUrlTextField.getText()));
         settings.setApiKey(apiKeyTextField.getText());
         settings.setOutbound(outboundCheckbox.isSelected());
         settings.setDescription(descriptionTextField.getText());
+    }
+
+    /**
+     * Ensures the service URL starts with http:// or https://.
+     * Uses http:// for localhost / loopback addresses, https:// for everything else.
+     */
+    private String normalizeServiceUrl(String url) {
+        if (url == null || url.trim().isEmpty()) {
+            return url;
+        }
+        String trimmed = url.trim();
+        if (trimmed.toLowerCase().startsWith("http://") || trimmed.toLowerCase().startsWith("https://")) {
+            return trimmed;
+        }
+        // Strip any accidental scheme-like prefix
+        String host = trimmed;
+        if (host.contains("://")) {
+            host = host.substring(host.indexOf("://") + 3);
+        }
+        // Extract hostname (before port or path)
+        String hostPart = host.split("[:/]")[0].toLowerCase();
+        if (hostPart.equals("localhost") || hostPart.equals("127.0.0.1") || hostPart.equals("::1")
+            || hostPart.startsWith("127.")) {
+            return "http://" + host;
+        }
+        return "https://" + host;
     }
 
     private void initComponents() {

@@ -1,3 +1,81 @@
+# Release Notes — v5 (2026-03-26): Fehler und Korrekturen in SMSCenterExt
+
+## Bugfixes
+
+### msg.setRefNo() statt msg.setDispatchDate() in PushHTTPGateway (Fehler)
+
+In `PushHTTPGateway.sendMessage()` wurde der Timestamp aus der push-service-Response
+fälschlicherweise in `msg.refNo` gespeichert statt in `msg.dispatchDate`.
+
+**Lösung**: `msg.setRefNo(timestamp)` ersetzt durch `msg.setDispatchDate(parsedDate)`.
+Der Timestamp wird jetzt als `java.util.Date` geparst. Wenn kein Timestamp in der
+Response vorhanden ist oder das Parsen fehlschlägt, wird die aktuelle lokale Zeit verwendet.
+`msg.refNo` wird jetzt wie beim BulkSmsHTTPGateway mit einem aufsteigenden Zähler gesetzt.
+
+**Geänderte Datei**: `PushHTTPGateway.java`
+
+### Ungültige Service URL führt zu unbehandelter Exception (Fehler)
+
+Wenn die Service URL ungültig war (z.B. ohne Schema), warf `Request.Builder.url()`
+eine `IllegalArgumentException`, die nicht gefangen wurde.
+
+**Lösung**: Der `Request.Builder`-Aufruf ist jetzt in einen try/catch-Block gepackt.
+Bei einer ungültigen URL wird eine Fehlermeldung geloggt und `false` zurückgegeben.
+
+**Geänderte Datei**: `PushHTTPGateway.java`
+
+### Timestamp-Format zu ungenau (Verbesserung)
+
+Der `SendHandler` im push-service gab den Timestamp im Format `"EEE HH:mm z"` zurück
+(z.B. `"Fri 14:30 CET"`). Dieses Format enthielt kein Datum und keine Sekunden/Millisekunden,
+was für `msg.dispatchDate` nicht ausreicht.
+
+**Lösung**: Neues Format `"yyyy-MM-dd HH:mm:ss.SSS Z"` (z.B. `"2026-03-26 14:30:05.123 +0100"`).
+Das Format wird von `PushHTTPGateway` beim Setzen von `msg.dispatchDate` korrekt geparst.
+
+**Geänderte Datei**: `SendHandler.java`
+
+## Verbesserungen
+
+### Synchronized HTTP-Aufruf in PushHTTPGateway
+
+Der HTTP POST in `PushHTTPGateway.sendMessage()` wird jetzt `synchronized` über ein
+`SYNC_Commander`-Objekt ausgeführt, analog zum BulkSmsHTTPGateway. Dies verhindert
+Race Conditions bei gleichzeitigem Versand mehrerer Nachrichten.
+
+**Geänderte Datei**: `PushHTTPGateway.java`
+
+### Automatische URL-Schema-Ergänzung im Settings Panel
+
+Beim Speichern der Gateway-Konfiguration wird die Service URL automatisch um das Schema
+ergänzt, falls es fehlt:
+- `localhost`, `127.x.x.x`, `::1` → `http://` vorangestellt
+- Alle anderen Adressen → `https://` vorangestellt
+- Bereits vorhandene Schemas werden nicht verändert
+
+**Geänderte Datei**: `PushGatewaySettingsPanel.java`
+
+## Geänderte Dateien (Zusammenfassung)
+
+| Datei | Änderung |
+|-------|----------|
+| `PushHTTPGateway.java` | try/catch für URL-Validierung, `setDispatchDate()` statt `setRefNo()`, Timestamp-Parsing, Fallback auf aktuelle Zeit, synchronized HTTP-Aufruf, refCount-Zähler |
+| `PushGatewaySettingsPanel.java` | `normalizeServiceUrl()` — automatische Schema-Ergänzung (http/https) beim Speichern |
+| `SendHandler.java` | Timestamp-Format geändert auf `yyyy-MM-dd HH:mm:ss.SSS Z` |
+
+## Dokumentation aktualisiert
+
+- `DOKUMENTATION.md` — Abschnitte 4.2 (API-Response Timestamp-Format), 7.4 (URL-Normalisierung), 7.6 (Nachrichtenversand-Ablauf), 11 (Troubleshooting: ungültige URL) aktualisiert
+- `RELEASE_NOTES.md` — Diesen Eintrag hinzugefügt
+
+## Hinweise zum Update
+
+1. **SMSCenterExt**: Vollständigen `Clean and Build` in NetBeans ausführen (Shift+F11)
+2. **push-service**: Neu bauen und deployen (`ant compile && ant jar && ant dist`)
+3. **Browser**: Keine Änderungen nötig
+
+---
+
 # Release Notes — v4 (2026-03-25): SMSCenterExt ↔ push-service Integration
 
 ## Bugfixes

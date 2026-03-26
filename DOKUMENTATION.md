@@ -3,7 +3,7 @@
 Dieses Dokument beschreibt Einrichtung, Konfiguration, Test und Betrieb der beiden
 Projekte **push-service** (Web-Push-Server) und **SMSCenterExt** (SMS-Gateway mit Push-Erweiterung).
 
-Stand: 2026-03-25
+Stand: 2026-03-26
 
 ---
 
@@ -452,11 +452,12 @@ Content-Type: application/json
 {
     "success": true,
     "sent": 1,
-    "timestamp": "Fri 14:30 CET"
+    "timestamp": "2026-03-26 14:30:05.123 +0100"
 }
 ```
 
 - `sent`: Anzahl der Geräte, an die erfolgreich gesendet wurde
+- `timestamp`: Vollständige lokale Serverzeit mit Zeitzone im Format `yyyy-MM-dd HH:mm:ss.SSS Z`
 - Wenn `sent: 0` und Spieler nicht registriert: zusätzlich `"message": "No devices registered for player 2001"`
 
 **Push-Payload**: Der Server sendet die Nachricht als JSON-Payload an den Browser:
@@ -747,7 +748,7 @@ curl.exe -X POST http://localhost:8080/api/push/send -H "Authorization: Bearer c
 
 Erwartete Antwort:
 ```json
-{"success":true,"sent":1,"timestamp":"Fri 10:05 CET"}
+{"success":true,"sent":1,"timestamp":"2026-03-26 10:05:12.456 +0100"}
 ```
 
 **Schritt 5**: Prüfen:
@@ -975,6 +976,11 @@ Das Push-Gateway wird in der SMSCenter-Oberfläche konfiguriert:
 | Description | Anzeigename | `Push Notification Gateway` |
 | Outbound | Ausgehende Nachrichten aktivieren | `true` (Checkbox) |
 
+**Automatische URL-Normalisierung**: Beim Speichern wird die Service URL automatisch um
+das Schema ergänzt, falls es fehlt. Für `localhost` und Loopback-Adressen (`127.x.x.x`, `::1`)
+wird `http://` vorangestellt, für alle anderen Adressen `https://`. Bereits vorhandene
+Schemas (`http://` oder `https://`) werden nicht verändert.
+
 Diese Werte werden in der SMSServer-Properties-Datei gespeichert als:
 ```properties
 gateway.0.serviceUrl=http://localhost:8080
@@ -1061,7 +1067,10 @@ Service.sendMessage(msg):
   → gateway.sendMessage(msg)
       → PushHTTPGateway.sendMessage()
         → resolvePlayerId(phone) → plNr via DB-Lookup
-        → HTTP POST an push-service /api/push/send
+        → Request.Builder mit URL-Validierung (try/catch IllegalArgumentException)
+        → synchronized (SYNC_Commander): HTTP POST an push-service /api/push/send
+        → Bei Erfolg: msg.setDispatchDate(timestamp aus Response oder aktuelle Zeit)
+        → msg.setRefNo(++refCount)
 ```
 
 #### Das `attributes`-Bitfeld
@@ -1361,6 +1370,7 @@ nssm start PushService
 | Nachricht bleibt auf Status `U` in `smsserver_out` | PushHTTPGateway wird nicht als outbound erkannt (SMSLib `attributes`-Bitfeld). | Sicherstellen, dass der aktuelle Code mit `setAttributes(getAttributes() \| 1)` im PushHTTPGateway-Konstruktor verwendet wird. `Clean and Build` ausführen. |
 | Log: "Push send failed ... HTTP 401" | API Key Mismatch | `apiKey` in SMSCenterExt muss identisch sein mit `push.api.key` in `push-service.properties` |
 | Log: "No player found for phone ..." | Telefonnummer nicht in `smscenter_phones` hinterlegt | Spieler in der SMSCenter-Verwaltung mit Telefonnummer anlegen |
+| Log: "PushHTTPGateway: Invalid service URL ..." | URL fehlt oder ist ungültig | Service URL in der Gateway-Konfiguration prüfen (muss mit `http://` oder `https://` beginnen — wird seit v5 automatisch ergänzt) |
 | Log: "PushHTTPGateway: No database configured" | Kein Database-Interface konfiguriert | In den Einstellungen muss neben dem Push-Gateway auch ein Database-Interface konfiguriert sein (für die Telefonnr→Spielernr-Auflösung) |
 | Nachricht wird gesendet (Status `S`), aber keine Notification | Spieler nicht im Browser registriert, oder Browser geschlossen | push-service-Log prüfen: `sent: 0` = kein Gerät registriert. Spieler muss im Browser auf "Aktivieren" klicken. |
 

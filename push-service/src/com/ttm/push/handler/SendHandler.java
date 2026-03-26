@@ -111,7 +111,7 @@ public class SendHandler implements HttpHandler
 			}
 
 			String timestamp = ZonedDateTime.now()
-				.format(DateTimeFormatter.ofPattern("EEE HH:mm z", Locale.ENGLISH));
+				.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS Z", Locale.ENGLISH));
 
 			JsonObject response = new JsonObject();
 			response.addProperty("success", true);

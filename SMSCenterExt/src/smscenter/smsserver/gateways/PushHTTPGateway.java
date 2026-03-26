@@ -6,6 +6,8 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import com.google.gson.Gson;
@@ -37,6 +39,8 @@ public class PushHTTPGateway extends org.smslib.AGateway
 	private final String apiKey;
 	private final OkHttpClient httpClient;
 	private final Gson gson;
+	private final Object SYNC_Commander = new Object();
+	private int refCount = 0;
 
 	private String dbConnectionUrl;
 	private Connection dbConnection;
@@ -128,36 +132,79 @@ public class PushHTTPGateway extends org.smslib.AGateway
 		requestJson.addProperty("message", messageText);
 
 		RequestBody body = RequestBody.create(gson.toJson(requestJson), JSON);
-		Request request = new Request.Builder()
-				.url(serviceUrl + "/api/push/send")
-				.addHeader("Authorization", "Bearer " + apiKey)
-				.addHeader("Content-Type", "application/json")
-				.post(body)
-				.build();
 
-		try (Response response = httpClient.newCall(request).execute())
+		Request request;
+		try
 		{
-			String responseBody = response.body() != null ? response.body().string() : "";
+			request = new Request.Builder()
+					.url(serviceUrl + "/api/push/send")
+					.addHeader("Authorization", "Bearer " + apiKey)
+					.addHeader("Content-Type", "application/json")
+					.post(body)
+					.build();
+		}
+		catch (IllegalArgumentException e)
+		{
+			Logger.getInstance().logError("PushHTTPGateway: Invalid service URL '" + serviceUrl +
+				"': " + e.getMessage(), e, getGatewayId());
+			msg.setMessageStatus(OutboundMessage.MessageStatuses.FAILED);
+			return false;
+		}
 
-			if (response.isSuccessful())
+		try
+		{
+			Response response;
+			synchronized (this.SYNC_Commander)
 			{
-				JsonObject result = JsonParser.parseString(responseBody).getAsJsonObject();
-				if (result.has("success") && result.get("success").getAsBoolean())
-				{
-					if (result.has("timestamp"))
-					{
-						msg.setRefNo(result.get("timestamp").getAsString());
-					}
-					msg.setMessageStatus(OutboundMessage.MessageStatuses.SENT);
-					Logger.getInstance().logInfo("Push sent to player " + playerId +
-						" (recipient: " + recipient + "), sent: " + result.get("sent").getAsInt(), null, getGatewayId());
-					return true;
-				}
+				response = httpClient.newCall(request).execute();
 			}
 
-			msg.setMessageStatus(OutboundMessage.MessageStatuses.FAILED);
-			Logger.getInstance().logError("Push send failed for player " + playerId + ": HTTP " + response.code() + " - " + responseBody, null, getGatewayId());
-			return false;
+			try
+			{
+				String responseBody = response.body() != null ? response.body().string() : "";
+
+				if (response.isSuccessful())
+				{
+					JsonObject result = JsonParser.parseString(responseBody).getAsJsonObject();
+					if (result.has("success") && result.get("success").getAsBoolean())
+					{
+						// Parse timestamp from response or use current time as fallback
+						Date dispatchDate;
+						if (result.has("timestamp"))
+						{
+							try
+							{
+								SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS Z");
+								dispatchDate = sdf.parse(result.get("timestamp").getAsString());
+							}
+							catch (Exception e)
+							{
+								Logger.getInstance().logWarn("PushHTTPGateway: Could not parse timestamp '" +
+									result.get("timestamp").getAsString() + "', using current time", null, getGatewayId());
+								dispatchDate = new Date();
+							}
+						}
+						else
+						{
+							dispatchDate = new Date();
+						}
+						msg.setDispatchDate(dispatchDate);
+						msg.setRefNo(Integer.toString(++refCount));
+						msg.setMessageStatus(OutboundMessage.MessageStatuses.SENT);
+						Logger.getInstance().logInfo("Push sent to player " + playerId +
+							" (recipient: " + recipient + "), sent: " + result.get("sent").getAsInt(), null, getGatewayId());
+						return true;
+					}
+				}
+
+				msg.setMessageStatus(OutboundMessage.MessageStatuses.FAILED);
+				Logger.getInstance().logError("Push send failed for player " + playerId + ": HTTP " + response.code() + " - " + responseBody, null, getGatewayId());
+				return false;
+			}
+			finally
+			{
+				response.close();
+			}
 		}
 		catch (Exception e)
 		{
