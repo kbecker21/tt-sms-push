@@ -84,33 +84,20 @@ public class Database
 	{
 		Connection conn = getConnection();
 
-		// Upsert: check if combination exists
-		String selectSql = "SELECT id FROM device_registrations WHERE player_id = ? AND endpoint = ?";
-		try (PreparedStatement ps = conn.prepareStatement(selectSql))
+		// Delete ALL existing registrations for this player to prevent duplicate
+		// pushes when the browser endpoint changes (SW update, browser restart, etc.)
+		String deleteSql = "DELETE FROM device_registrations WHERE player_id = ?";
+		try (PreparedStatement ps = conn.prepareStatement(deleteSql))
 		{
 			ps.setString(1, playerId);
-			ps.setString(2, endpoint);
-			try (ResultSet rs = ps.executeQuery())
+			int deleted = ps.executeUpdate();
+			if (deleted > 0)
 			{
-				if (rs.next())
-				{
-					// Update existing
-					long id = rs.getLong("id");
-					String updateSql = "UPDATE device_registrations SET p256dh = ?, auth_key = ? WHERE id = ?";
-					try (PreparedStatement ups = conn.prepareStatement(updateSql))
-					{
-						ups.setString(1, p256dh);
-						ups.setString(2, authKey);
-						ups.setLong(3, id);
-						ups.executeUpdate();
-					}
-					log.info("Updated registration for player {} (endpoint existing)", playerId);
-					return;
-				}
+				log.info("Cleaned up {} old registration(s) for player {}", deleted, playerId);
 			}
 		}
 
-		// Insert new
+		// Insert fresh registration
 		String insertSql = "INSERT INTO device_registrations (player_id, endpoint, p256dh, auth_key) VALUES (?, ?, ?, ?)";
 		try (PreparedStatement ps = conn.prepareStatement(insertSql))
 		{
@@ -120,7 +107,7 @@ public class Database
 			ps.setString(4, authKey);
 			ps.executeUpdate();
 		}
-		log.info("Registered new device for player {}", playerId);
+		log.info("Registered device for player {}", playerId);
 	}
 
 	public synchronized List<DeviceRegistration> getDevicesForPlayer(String playerId) throws SQLException

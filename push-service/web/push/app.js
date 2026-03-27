@@ -100,34 +100,44 @@ if ('serviceWorker' in navigator) {
         if (!event.data) return;
 
         if (event.data.type === 'push-message') {
-            // Store message for the correct player (even if it's not THIS tab's player)
-            var msgPlayerId = event.data.playerId || playerId;
-            var messages = JSON.parse(localStorage.getItem('push_messages_' + msgPlayerId) || '[]');
+            var msgPlayerId = event.data.playerId || '';
+            // Only process messages for THIS tab's player — ignore other players
+            if (msgPlayerId !== playerId) return;
+
+            var messageId = event.data.messageId || '';
+            var messages = JSON.parse(localStorage.getItem('push_messages_' + playerId) || '[]');
+
+            // Deduplicate by messageId (prevents duplicates from retries or multiple tabs)
+            if (messageId && messages.some(function(m) { return m.messageId === messageId; })) {
+                return;
+            }
+
             messages.unshift({
                 text: event.data.message,
-                time: new Date().toLocaleTimeString()
+                time: new Date().toLocaleTimeString(),
+                messageId: messageId,
+                playerId: playerId
             });
             // Keep last 50 messages
             if (messages.length > 50) messages.length = 50;
-            localStorage.setItem('push_messages_' + msgPlayerId, JSON.stringify(messages));
-            // Only update UI if this message is for THIS player
-            if (msgPlayerId === playerId) {
-                loadMessages();
-            }
+            localStorage.setItem('push_messages_' + playerId, JSON.stringify(messages));
+            loadMessages();
         }
 
         if (event.data.type === 'missed-messages' && event.data.playerId === playerId) {
-            // Merge missed messages from IndexedDB into localStorage (text-only dedup)
+            // Merge missed messages from IndexedDB into localStorage (messageId dedup)
             if (event.data.messages && event.data.messages.length > 0) {
                 var messages = JSON.parse(localStorage.getItem('push_messages_' + playerId) || '[]');
-                var existingTexts = {};
-                messages.forEach(function(m) { existingTexts[m.text] = true; });
+                var existingIds = {};
+                messages.forEach(function(m) {
+                    if (m.messageId) existingIds[m.messageId] = true;
+                });
                 event.data.messages.forEach(function(msg) {
-                    if (!existingTexts[msg.text]) {
-                        var time = new Date(msg.time).toLocaleTimeString();
-                        messages.unshift({ text: msg.text, time: time });
-                        existingTexts[msg.text] = true;
-                    }
+                    // Skip if messageId already known
+                    if (msg.messageId && existingIds[msg.messageId]) return;
+                    var time = new Date(msg.time).toLocaleTimeString();
+                    messages.unshift({ text: msg.text, time: time, messageId: msg.messageId || '', playerId: playerId });
+                    if (msg.messageId) existingIds[msg.messageId] = true;
                 });
                 if (messages.length > 50) messages.length = 50;
                 localStorage.setItem('push_messages_' + playerId, JSON.stringify(messages));

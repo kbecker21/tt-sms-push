@@ -2,48 +2,111 @@
 
 ## Bugfixes
 
-### Jede Nachricht wurde doppelt zugestellt (Kritisch)
+### Jede Nachricht wurde mehrfach zugestellt (Kritisch)
 
 Beim Empfang einer neuen Nachricht im Browser wurde die vorherige Nachricht erneut
-angezeigt. Jede Nachricht erschien insgesamt zweimal in der Nachrichtenliste.
+angezeigt. Jede Nachricht erschien mehrmals in der Nachrichtenliste.
 
-**Ursache**: Der Service Worker speicherte jede eingehende Push-Nachricht **gleichzeitig**
-in IndexedDB (Offline-Puffer) UND leitete sie per `postMessage` an offene Tabs weiter.
-Dadurch existierte jede Nachricht in zwei Speichern (IndexedDB + localStorage). Bei
-einem Seitenneuladen oder Tab-Wechsel wurden die IndexedDB-Nachrichten als "verpasste
-Nachrichten" erneut geladen. Die zeitbasierte Deduplizierung (`time + '|' + text`)
-konnte diese nicht erkennen, weil die Zeitstempel aus unterschiedlichen Quellen stammten
-(IndexedDB: `toISOString()` im Service Worker, localStorage: `toLocaleTimeString()` im Tab).
+**Ursache 1 — Mehrfache Device-Registrierungen** (Hauptursache):
+`Database.registerDevice()` machte ein Upsert auf `player_id + endpoint`. Wenn sich
+der Browser-Endpoint änderte (nach SW-Update, Browser-Neustart, erneute Push-Subscription),
+blieb der alte Eintrag in der Datenbank erhalten. `SendHandler.handle()` sendete dann den
+Web Push an ALLE registrierten Endpoints für den Spieler → der Browser empfing die
+gleiche Nachricht mehrfach (einmal pro Endpoint).
 
-**Lösung (zweistufig)**:
-1. **sw.js**: Der Service Worker prüft jetzt **zuerst**, ob Tabs geöffnet sind:
-   - Tabs offen → Nachricht wird nur per `postMessage` weitergeleitet (KEIN IndexedDB)
-   - Kein Tab offen → Nachricht wird nur in IndexedDB gespeichert (für späteres Abrufen)
-   Die doppelte Speicherung ist damit ausgeschlossen.
-2. **app.js**: Die Deduplizierung beim Zusammenführen verpasster Nachrichten verwendet
-   jetzt nur den **Nachrichtentext** als Schlüssel (statt `time + '|' + text`), da der
-   Text zuverlässiger ist als Zeitstempel aus unterschiedlichen Quellen.
+**Ursache 2 — Doppelte Speicherung (IndexedDB + localStorage)**:
+Der Service Worker speicherte jede eingehende Push-Nachricht gleichzeitig in IndexedDB
+UND leitete sie per `postMessage` an offene Tabs weiter. Bei Seitenneuladen wurden die
+IndexedDB-Nachrichten als "verpasst" erneut geladen, und die zeitbasierte Deduplizierung
+versagte wegen unterschiedlicher Zeitstempel-Formate.
 
-**Geänderte Dateien**: `sw.js`, `app.js`
+**Ursache 3 — Keine clientseitige Deduplizierung**:
+Der `push-message`-Handler in `app.js` fügte jede empfangene Nachricht blind in
+localStorage ein, ohne zu prüfen ob sie bereits vorhanden war. Bei Retries
+(z.B. SMSCenter-Queue bei Timeout) oder Debugger-Pausen wurde dieselbe Nachricht
+mehrfach gespeichert und angezeigt.
+
+**Ursache 4 — Multi-Tab Race Condition**:
+Bei mehreren offenen Tabs liefert `clients.matchAll()` im Service Worker alle Tabs.
+Jeder Tab empfängt einen `postMessage` und schreibt in den gemeinsamen localStorage.
+Der zweite Tab sieht die Schreiboperation des ersten und fügt die Nachricht erneut hinzu.
+
+**Ursache 5 — SMSCenter-Retry mit neuer messageId**:
+Bei einem Timeout des push-service (z.B. bei Debugger-Pause) gibt `PushHTTPGateway.sendMessage()`
+`false` zurück. SMSLib behält die Nachricht in der Queue und sendet sie erneut. Jeder neue
+HTTP-Request erzeugte bisher eine neue zufällige `messageId` im `SendHandler`, sodass der
+Browser den Retry nicht als Duplikat erkennen konnte.
+
+**Ursache 6 — Nachrichten anderer Spieler im eigenen Tab sichtbar**:
+Jeder offene Tab speicherte Nachrichten für **alle** Spieler in localStorage (Cross-Player-
+Speicherung aus v3). Bei fehlender oder leerer `playerId` im Push-Payload fiel
+`msgPlayerId` auf den eigenen Spieler zurück → fremde Nachricht landete im eigenen Storage.
+
+**Lösung (siebenstufig, über alle Schichten)**:
+
+1. **Database.java** — Registrierung bereinigt alte Einträge:
+   Bei Registrierung werden alle bestehenden Einträge für den Spieler gelöscht,
+   bevor der neue eingefügt wird → max. 1 Device pro Spieler → kein Mehrfachversand.
+
+2. **PushHTTPGateway.java** — Deterministische messageId vom Sender:
+   Erzeugt eine `messageId` per `UUID.nameUUIDFromBytes(playerId + text)`. Da der
+   Hash deterministisch ist, erzeugen SMSLib-Retries die **identische** ID.
+   Der Browser erkennt Retries und ignoriert sie.
+
+3. **SendHandler.java** — Übernimmt messageId vom Sender:
+   Verwendet die `messageId` aus dem HTTP-Request (von PushHTTPGateway). Nur wenn
+   keine mitgeliefert wird (z.B. bei direktem curl-Aufruf), erzeugt er eine zufällige.
+
+4. **sw.js** — Spieler-bezogene Speicherung + Notification-Dedup:
+   - postMessage an alle offenen Tabs (jeder Tab filtert selbst)
+   - Kein Tab für den betroffenen Spieler offen → IndexedDB-Speicherung
+   - Notification-Tag basiert auf `messageId` → doppelte OS-Notifications werden
+     vom Browser automatisch ersetzt statt gestapelt.
+
+5. **app.js** — Strikte Spieler-Isolation:
+   Der `push-message`-Handler verarbeitet **nur** Nachrichten für den eigenen Spieler.
+   Nachrichten anderer Spieler werden ignoriert (`msgPlayerId !== playerId → return`).
+   Die Cross-Player-Speicherung aus v3 wurde entfernt.
+
+6. **app.js** — messageId-Deduplizierung im Client:
+   Beide Message-Handler (`push-message` und `missed-messages`) prüfen vor dem
+   Speichern, ob die `messageId` bereits in localStorage existiert → Duplikate
+   von Multi-Tab, Retries oder IndexedDB-Merge werden erkannt und ignoriert.
+
+7. **app.js** — playerId im localStorage-Eintrag:
+   Jeder Nachrichteneintrag speichert jetzt auch die `playerId`, damit im
+   DevTools-Inspektor sofort erkennbar ist, welchem Spieler die Nachricht gehört.
 
 ## Geänderte Dateien (Zusammenfassung)
 
 | Datei | Änderung |
 |-------|----------|
-| `sw.js` | Push-Handler: exklusive Wahl zwischen postMessage (Tabs offen) und IndexedDB (kein Tab offen) statt beides gleichzeitig |
-| `app.js` | Missed-Messages-Handler: textbasierte Deduplizierung statt zeitbasierter |
+| `PushHTTPGateway.java` | Deterministische `messageId` (`UUID.nameUUIDFromBytes`) im HTTP-Request, stabil über Retries |
+| `Database.java` | `registerDevice()`: DELETE all + INSERT — garantiert 1 Device pro Spieler |
+| `SendHandler.java` | Liest `messageId` aus Request (Fallback: `UUID.randomUUID()`) |
+| `sw.js` | Spieler-bezogene IndexedDB-Speicherung (nur wenn kein Tab für den Spieler offen), Notification-Tag per `messageId` |
+| `app.js` | Strikte Spieler-Isolation (nur eigene Nachrichten), Dedup per `messageId`, `playerId` im localStorage-Eintrag |
 
 ## Dokumentation aktualisiert
 
-- `DOKUMENTATION.md` — Abschnitte 5.2 (Service Worker), 9.1 (Gesamtablauf), 11 (Offline-Nachrichten, Service Worker Verhalten) aktualisiert
+- `DOKUMENTATION.md` — Abschnitte 5.2 (Service Worker), 7.6 (Push-Payload), 9.1 (Gesamtablauf), 11 (Offline-Nachrichten, Service Worker Verhalten, Registrierung) aktualisiert
 - `RELEASE_NOTES.md` — Diesen Eintrag hinzugefügt
 
 ## Hinweise zum Update
 
 1. **push-service**: Neu bauen und deployen (`ant compile && ant jar && ant dist`)
-2. **SMSCenterExt**: Keine Änderungen nötig
+2. **SMSCenterExt**: Vollständigen `Clean and Build` in NetBeans ausführen (Shift+F11)
 3. **Browser**: Spieler müssen **Ctrl+F5** drücken (oder den Service Worker in den DevTools
    deregistrieren), damit die aktualisierte `sw.js` geladen wird
+4. **Wichtig**: Nach dem Update sollte sich jeder Spieler einmal **neu registrieren**
+   (Abmelden → erneut Aktivieren), damit alte Device-Einträge in der DB bereinigt werden
+
+## Bekannte Einschränkung
+
+Die `messageId` wird deterministisch aus `playerId + Nachrichtentext` erzeugt. Wenn exakt
+derselbe Text an denselben Spieler nochmals gesendet wird (z.B. "Tisch 3 bitte" zweimal),
+erkennt der Browser die zweite Nachricht als Duplikat und ignoriert sie. Workaround:
+Nachrichtentext leicht variieren (z.B. "Tisch 3 bitte (2)").
 
 ---
 

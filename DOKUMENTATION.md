@@ -424,8 +424,9 @@ Content-Type: application/json
 }
 ```
 
-**Verhalten**: Upsert — bei bestehender Kombination `playerId + endpoint` werden
-die Schlüssel aktualisiert; bei neuer Kombination wird eingefügt.
+**Verhalten**: Bei Registrierung werden **alle** bestehenden Einträge für den Spieler
+gelöscht, dann wird der neue Eintrag eingefügt. Dadurch existiert pro Spieler maximal
+ein Device — kein Mehrfachversand bei Endpoint-Änderungen (SW-Update, Browser-Neustart).
 
 ---
 
@@ -462,10 +463,12 @@ Content-Type: application/json
 
 **Push-Payload**: Der Server sendet die Nachricht als JSON-Payload an den Browser:
 ```json
-{"playerId": "2001", "message": "Ergebnis: Mueller 3:1 Schmidt"}
+{"playerId": "2001", "message": "Ergebnis: Mueller 3:1 Schmidt", "messageId": "a1b2c3d4-..."}
 ```
 Die `playerId` wird mitgeschickt, damit der Service Worker die Nachricht dem richtigen
 Spieler zuordnen und in der System-Notification den Spieler anzeigen kann (z.B. "TTM - 2001").
+Die `messageId` (UUID) dient der clientseitigen Deduplizierung — der Browser erkennt und
+ignoriert Nachrichten mit bereits bekannter ID (schützt gegen Retries und Mehrfachversand).
 
 **Verhalten bei abgelaufenen Subscriptions**: Wenn der Browser-Push-Endpoint mit
 HTTP 410 (Gone) oder 404 antwortet, wird die Registrierung automatisch aus der DB gelöscht.
@@ -631,16 +634,16 @@ Der Service Worker (`sw.js`) läuft als Hintergrundprozess im Browser:
 - **Spieler-Zuordnung**: Liest die `playerId` aus dem Push-Payload und ordnet die
   Nachricht dem richtigen Spieler zu
 - **Benachrichtigungen**: Zeigt Windows-/System-Notifications an mit Spieler-Kennung
-  im Titel (z.B. "TTM - TEST01"), Icon, Vibration und Ton
+  im Titel (z.B. "TTM - TEST01"), Icon, Vibration und Ton. Der Notification-Tag basiert
+  auf der `messageId` — bei Retries wird die bestehende Notification ersetzt statt gestapelt.
 - **Offline-Speicherung**: Speichert eingehende Nachrichten in IndexedDB
   (DB: `ttm-push-messages`) **nur wenn kein Tab geöffnet ist**. Beim Öffnen eines
   Tabs werden die zwischengespeicherten Nachrichten abgerufen, in localStorage
   gemergt und aus IndexedDB gelöscht. Dadurch wird eine doppelte Zustellung vermieden.
-- **Weiterleitung**: Leitet empfangene Nachrichten inkl. `playerId` an offene Tabs weiter,
-  **wenn mindestens ein Tab geöffnet ist** (dann erfolgt keine IndexedDB-Speicherung).
-  Jeder offene Tab speichert Nachrichten für alle Spieler in localStorage (nicht nur
-  für den eigenen), sodass bei Mehrspieler-Szenarien keine Nachrichten verloren gehen.
-  Die Anzeige im Tab erfolgt weiterhin nur für den eigenen Spieler.
+- **Weiterleitung**: Leitet empfangene Nachrichten inkl. `playerId` per `postMessage` an
+  alle offene Tabs weiter. Jeder Tab verarbeitet **nur** Nachrichten für seinen eigenen
+  Spieler und ignoriert fremde. Wenn kein Tab für den betroffenen Spieler offen ist,
+  speichert der Service Worker die Nachricht in IndexedDB (für späteres Abrufen).
 - **Klick-Handling**: Beim Klick auf eine Notification wird bevorzugt der Tab des
   betroffenen Spielers fokussiert, oder ein neuer mit der passenden Spieler-URL geöffnet
 
@@ -1068,8 +1071,11 @@ Service.sendMessage(msg):
   → gateway.sendMessage(msg)
       → PushHTTPGateway.sendMessage()
         → resolvePlayerId(phone) → plNr via DB-Lookup
+        → Deterministische messageId: UUID.nameUUIDFromBytes(playerId + text)
+          (stabil über SMSLib-Retries — gleicher Input = gleiche ID)
         → Request.Builder mit URL-Validierung (try/catch IllegalArgumentException)
         → synchronized (SYNC_Commander): HTTP POST an push-service /api/push/send
+          mit {playerId, message, messageId} im JSON-Body
         → Bei Erfolg: msg.setDispatchDate(timestamp aus Response oder aktuelle Zeit)
         → msg.setRefNo(++refCount)
 ```
@@ -1171,16 +1177,17 @@ den push-service per curl anspricht (siehe Abschnitt 6.1, Schritt 4).
 │                                                                      │
 │  PushHTTPGateway.sendMessage()                                       │
 │  6. resolvePlayerId(): +436991234567 → "2001"                      │
+│  6b. messageId = UUID.nameUUIDFromBytes(playerId + text)            │
 │  7. HTTP POST an push-service: /api/push/send                       │
-│     mit Bearer-Token und {playerId: "2001", message: "..."}        │
+│     mit Bearer-Token und {playerId, message, messageId}             │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
                               ↓ HTTP
 ┌─ push-service (Server) ────────────────────────────────────────────┐
 │                                                                      │
 │  SendHandler                                                         │
-│  8. Bearer-Token prüfen                                             │
-│  9. Alle Geräte für Spieler 2001 aus DB laden                      │
+│  8. Bearer-Token prüfen, messageId (UUID) generieren               │
+│  9. Device für Spieler 2001 aus DB laden (max. 1 pro Spieler)      │
 │  10. Für jedes Gerät:                                               │
 │      a) Nachricht mit AES-128-GCM verschlüsseln (RFC 8291)        │
 │      b) VAPID JWT erstellen (RFC 8292)                              │
@@ -1204,7 +1211,7 @@ den push-service per curl anspricht (siehe Abschnitt 6.1, Schritt 4).
 │                                                                      │
 │  PWA (app.js)                                                        │
 │  17. Empfängt Nachricht vom Service Worker                          │
-│  18. Speichert in localStorage für ALLE Spieler (letzte 50/Spieler)│
+│  18. Speichert in localStorage nur für EIGENEN Spieler (max 50)    │
 │  19. Zeigt in der Nachrichtenliste an                               │
 │  --- Beim Öffnen eines Tabs ---                                     │
 │  20. Fragt verpasste Nachrichten vom SW ab (aus IndexedDB)         │
@@ -1324,12 +1331,11 @@ nssm start PushService
 - **Ein SW pro Scope**: Alle Tabs unter `/push/` teilen denselben Service Worker.
   Mehrere Spieler im selben Browser teilen denselben Push-Endpoint. Der Service Worker
   empfängt alle Nachrichten und prüft, ob Tabs geöffnet sind:
-  - **Tabs offen**: Nachricht wird per `postMessage` an alle Tabs weitergeleitet
-    (keine IndexedDB-Speicherung → keine Doppel-Zustellung).
-  - **Kein Tab offen**: Nachricht wird in IndexedDB gespeichert. Beim Öffnen eines Tabs
-    werden verpasste Nachrichten abgerufen, in localStorage gemergt und aus IndexedDB gelöscht.
-  Jeder offene Tab speichert Nachrichten für alle Spieler in localStorage
-  (nicht nur für den eigenen). Die Anzeige erfolgt weiterhin nur für den eigenen Spieler.
+  - **Tab für den Spieler offen**: Nachricht wird per `postMessage` zugestellt.
+    Der Tab verarbeitet nur Nachrichten für seinen eigenen Spieler (strikte Isolation).
+  - **Kein Tab für den Spieler offen**: Nachricht wird in IndexedDB gespeichert.
+    Beim Öffnen eines Tabs werden verpasste Nachrichten abgerufen, per `messageId`-Dedup
+    in localStorage gemergt und aus IndexedDB gelöscht.
   Windows-Notifications zeigen die Spielernummer im Titel, damit erkennbar ist,
   für wen die Nachricht bestimmt ist.
 
@@ -1351,21 +1357,31 @@ nssm start PushService
 - TTL (Time to Live): 24 Stunden (konfiguriert im `WebPushService.java`)
 - Nachrichten, die älter als 24h sind, verfallen
 - Beim nächsten Online-Gang des Browsers werden zwischengespeicherte Nachrichten zugestellt
-- **Zweistufige lokale Zwischenspeicherung** (exklusiv — nicht gleichzeitig):
-  1. **Tabs offen**: Nachricht wird per `postMessage` an alle offenen Tabs weitergeleitet.
-     Jeder Tab speichert die Nachricht in localStorage für alle Spieler.
-  2. **Kein Tab offen**: Der Service Worker speichert die Nachricht in IndexedDB.
-     Beim Öffnen eines Tabs werden verpasste Nachrichten abgerufen, per Text-Dedup
-     in localStorage gemergt und aus IndexedDB gelöscht.
-  Durch die exklusive Wahl (entweder postMessage ODER IndexedDB, nie beides)
-  wird eine doppelte Zustellung vermieden.
+- **Zweistufige lokale Zwischenspeicherung** (spielerbezogen):
+  1. **Tab für den Spieler offen**: Nachricht wird per `postMessage` zugestellt.
+     Der Tab speichert nur seine eigenen Nachrichten (strikte Spieler-Isolation).
+  2. **Kein Tab für den Spieler offen**: Der Service Worker speichert die Nachricht
+     in IndexedDB. Beim Öffnen eines Tabs werden verpasste Nachrichten abgerufen,
+     per `messageId`-Dedup in localStorage gemergt und aus IndexedDB gelöscht.
+  Durch die spielerbezogene Zuordnung (postMessage + IndexedDB-Fallback) und
+  `messageId`-Dedup wird sowohl Datenverlust als auch Doppelzustellung vermieden.
+- **Deduplizierung per messageId**: Die `messageId` wird deterministisch vom Sender
+  (`PushHTTPGateway`) aus `playerId + text` erzeugt (`UUID.nameUUIDFromBytes`). Sie ist
+  stabil über SMSLib-Retries (gleicher Input = gleiche ID). Der Client erkennt und ignoriert
+  Nachrichten mit bereits bekannter ID. Dies schützt zuverlässig gegen Duplikate bei Retries,
+  mehrfachen Endpoints, Multi-Tab-Race-Conditions oder IndexedDB/localStorage-Überschneidungen.
+  **Einschränkung**: Identischer Text an denselben Spieler erzeugt dieselbe messageId und wird
+  als Duplikat erkannt. Workaround: Text leicht variieren.
+- **Ein Device pro Spieler**: Bei der Registrierung werden alle bestehenden Device-Einträge
+  für den Spieler gelöscht, bevor der neue Eintrag eingefügt wird. Dadurch existiert pro
+  Spieler maximal ein Endpoint in der Datenbank — kein Mehrfachversand.
 
 ### Datenspeicherung im Browser
 
 | Speicherort | Inhalt | Sichtbar in |
 |------------|--------|-------------|
 | Push-Subscription | Endpoint + Keys | F12 → Application → Service Workers → Push |
-| Local Storage | Nachrichtenliste | F12 → Application → Local Storage → `push_messages_*` |
+| Local Storage | Nachrichtenliste (text, time, messageId, playerId) | F12 → Application → Local Storage → `push_messages_*` |
 | IndexedDB | Offline-Nachrichtenpuffer | F12 → Application → IndexedDB → `ttm-push-messages` |
 | Service Worker | Registrierung | `chrome://serviceworker-internals/` |
 

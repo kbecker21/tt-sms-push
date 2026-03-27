@@ -19,6 +19,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 public class SendHandler implements HttpHandler
 {
@@ -81,14 +82,26 @@ public class SendHandler implements HttpHandler
 			}
 
 			int sent = 0;
+			// Use messageId from sender (stable across retries) or generate random one
+			String messageId;
+			if (body.has("messageId") && body.get("messageId").isJsonPrimitive()
+				&& !body.get("messageId").getAsString().isEmpty())
+			{
+				messageId = body.get("messageId").getAsString();
+			}
+			else
+			{
+				messageId = UUID.randomUUID().toString();
+			}
 			for (DeviceRegistration device : devices)
 			{
 				try
 				{
-					// Include playerId in payload so SW can route messages per player
+					// Include playerId + unique messageId in payload for routing and dedup
 				JsonObject payload = new JsonObject();
 				payload.addProperty("playerId", playerId);
 				payload.addProperty("message", message);
+				payload.addProperty("messageId", messageId);
 				int statusCode = pushService.sendPush(device, gson.toJson(payload));
 					if (statusCode == 201 || statusCode == 202)
 					{

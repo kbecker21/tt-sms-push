@@ -6,9 +6,11 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Properties;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -127,9 +129,16 @@ public class PushHTTPGateway extends org.smslib.AGateway
 		String playerId = resolvePlayerId(recipient);
 		String messageText = msg.getText();
 
+		// Deterministic messageId from content — stable across SMSLib retries
+		// (same playerId + text = same ID → browser deduplicates on retry)
+		String messageId = UUID.nameUUIDFromBytes(
+			(playerId + "\0" + messageText).getBytes(StandardCharsets.UTF_8)
+		).toString();
+
 		JsonObject requestJson = new JsonObject();
 		requestJson.addProperty("playerId", playerId);
 		requestJson.addProperty("message", messageText);
+		requestJson.addProperty("messageId", messageId);
 
 		RequestBody body = RequestBody.create(gson.toJson(requestJson), JSON);
 

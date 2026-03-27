@@ -18,14 +18,15 @@ function openMessagesDB() {
     });
 }
 
-function storeMessage(playerId, message) {
+function storeMessage(playerId, message, messageId) {
     return openMessagesDB().then(function(db) {
         return new Promise(function(resolve, reject) {
             var tx = db.transaction('messages', 'readwrite');
             tx.objectStore('messages').add({
                 playerId: playerId,
                 text: message,
-                time: new Date().toISOString()
+                time: new Date().toISOString(),
+                messageId: messageId || ''
             });
             tx.oncomplete = function() { resolve(); };
             tx.onerror = function(event) { reject(event.target.error); };
@@ -44,7 +45,7 @@ function getAndDeleteMessages(playerId) {
             request.onsuccess = function(event) {
                 var cursor = event.target.result;
                 if (cursor) {
-                    results.push({ text: cursor.value.text, time: cursor.value.time });
+                    results.push({ text: cursor.value.text, time: cursor.value.time, messageId: cursor.value.messageId || '' });
                     cursor.delete();
                     cursor.continue();
                 }
@@ -78,7 +79,7 @@ function clearMessagesForPlayer(playerId) {
 // --- Push event handler ---
 
 self.addEventListener('push', function(event) {
-    let data = { title: 'TTM', body: 'Neue Nachricht', playerId: '' };
+    let data = { title: 'TTM', body: 'Neue Nachricht', playerId: '', messageId: '' };
 
     if (event.data) {
         try {
@@ -86,6 +87,7 @@ self.addEventListener('push', function(event) {
             data.playerId = json.playerId || '';
             data.body = json.body || json.message || event.data.text();
             data.title = data.playerId ? ('TTM - ' + data.playerId) : (json.title || 'TTM');
+            data.messageId = json.messageId || '';
         } catch (e) {
             data.body = event.data.text();
         }
@@ -96,7 +98,7 @@ self.addEventListener('push', function(event) {
         icon: '/push/icon-192.png',
         badge: '/push/icon-192.png',
         vibrate: [200, 100, 200],
-        tag: 'ttm-push-' + Date.now(),
+        tag: data.messageId ? ('ttm-push-' + data.messageId) : ('ttm-push-' + Date.now()),
         data: {
             url: data.playerId
                 ? (self.registration.scope + '?player=' + data.playerId)
@@ -110,21 +112,23 @@ self.addEventListener('push', function(event) {
             .then(function(clients) {
                 var promises = [self.registration.showNotification(data.title, options)];
 
-                if (clients.length > 0) {
-                    // Tabs are open — forward via postMessage (tabs handle localStorage storage)
-                    clients.forEach(function(client) {
-                        client.postMessage({
-                            type: 'push-message',
-                            title: data.title,
-                            message: data.body,
-                            playerId: data.playerId
-                        });
+                // Forward to all open tabs (each tab only processes its own player)
+                clients.forEach(function(client) {
+                    client.postMessage({
+                        type: 'push-message',
+                        title: data.title,
+                        message: data.body,
+                        playerId: data.playerId,
+                        messageId: data.messageId
                     });
-                } else {
-                    // No tabs open — store in IndexedDB for later retrieval
-                    if (data.playerId) {
-                        promises.push(storeMessage(data.playerId, data.body));
-                    }
+                });
+
+                // If no tab is open for THIS player, store in IndexedDB for later retrieval
+                var hasPlayerTab = data.playerId && clients.some(function(client) {
+                    return client.url && client.url.includes('player=' + encodeURIComponent(data.playerId));
+                });
+                if (!hasPlayerTab && data.playerId) {
+                    promises.push(storeMessage(data.playerId, data.body, data.messageId));
                 }
 
                 return Promise.all(promises);
