@@ -106,13 +106,12 @@ self.addEventListener('push', function(event) {
     };
 
     event.waitUntil(
-        Promise.all([
-            self.registration.showNotification(data.title, options),
-            // Store message in IndexedDB for offline retrieval
-            data.playerId ? storeMessage(data.playerId, data.body) : Promise.resolve(),
-            // Forward to open clients
-            self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-                .then(function(clients) {
+        self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+            .then(function(clients) {
+                var promises = [self.registration.showNotification(data.title, options)];
+
+                if (clients.length > 0) {
+                    // Tabs are open — forward via postMessage (tabs handle localStorage storage)
                     clients.forEach(function(client) {
                         client.postMessage({
                             type: 'push-message',
@@ -121,8 +120,15 @@ self.addEventListener('push', function(event) {
                             playerId: data.playerId
                         });
                     });
-                })
-        ])
+                } else {
+                    // No tabs open — store in IndexedDB for later retrieval
+                    if (data.playerId) {
+                        promises.push(storeMessage(data.playerId, data.body));
+                    }
+                }
+
+                return Promise.all(promises);
+            })
     );
 });
 

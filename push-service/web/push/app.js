@@ -117,16 +117,16 @@ if ('serviceWorker' in navigator) {
         }
 
         if (event.data.type === 'missed-messages' && event.data.playerId === playerId) {
-            // Merge missed messages from IndexedDB into localStorage
+            // Merge missed messages from IndexedDB into localStorage (text-only dedup)
             if (event.data.messages && event.data.messages.length > 0) {
                 var messages = JSON.parse(localStorage.getItem('push_messages_' + playerId) || '[]');
                 var existingTexts = {};
-                messages.forEach(function(m) { existingTexts[m.time + '|' + m.text] = true; });
+                messages.forEach(function(m) { existingTexts[m.text] = true; });
                 event.data.messages.forEach(function(msg) {
-                    var time = new Date(msg.time).toLocaleTimeString();
-                    var key = time + '|' + msg.text;
-                    if (!existingTexts[key]) {
+                    if (!existingTexts[msg.text]) {
+                        var time = new Date(msg.time).toLocaleTimeString();
                         messages.unshift({ text: msg.text, time: time });
+                        existingTexts[msg.text] = true;
                     }
                 });
                 if (messages.length > 50) messages.length = 50;

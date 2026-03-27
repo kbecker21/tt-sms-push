@@ -632,11 +632,12 @@ Der Service Worker (`sw.js`) läuft als Hintergrundprozess im Browser:
   Nachricht dem richtigen Spieler zu
 - **Benachrichtigungen**: Zeigt Windows-/System-Notifications an mit Spieler-Kennung
   im Titel (z.B. "TTM - TEST01"), Icon, Vibration und Ton
-- **Offline-Speicherung**: Speichert jede eingehende Nachricht in IndexedDB
-  (DB: `ttm-push-messages`), damit sie auch dann verfügbar ist, wenn kein Tab für
-  den betreffenden Spieler geöffnet ist. Beim Öffnen eines Tabs werden die
-  zwischengespeicherten Nachrichten abgerufen und aus IndexedDB gelöscht.
-- **Weiterleitung**: Leitet empfangene Nachrichten inkl. `playerId` an offene Tabs weiter.
+- **Offline-Speicherung**: Speichert eingehende Nachrichten in IndexedDB
+  (DB: `ttm-push-messages`) **nur wenn kein Tab geöffnet ist**. Beim Öffnen eines
+  Tabs werden die zwischengespeicherten Nachrichten abgerufen, in localStorage
+  gemergt und aus IndexedDB gelöscht. Dadurch wird eine doppelte Zustellung vermieden.
+- **Weiterleitung**: Leitet empfangene Nachrichten inkl. `playerId` an offene Tabs weiter,
+  **wenn mindestens ein Tab geöffnet ist** (dann erfolgt keine IndexedDB-Speicherung).
   Jeder offene Tab speichert Nachrichten für alle Spieler in localStorage (nicht nur
   für den eigenen), sodass bei Mehrspieler-Szenarien keine Nachrichten verloren gehen.
   Die Anzeige im Tab erfolgt weiterhin nur für den eigenen Spieler.
@@ -1196,9 +1197,10 @@ den push-service per curl anspricht (siehe Abschnitt 6.1, Schritt 4).
 │                                                                      │
 │  Service Worker (sw.js)                                              │
 │  13. Empfängt Push-Event                                            │
-│  14. Speichert Nachricht in IndexedDB (Offline-Puffer)             │
+│  14. Prüft ob Tabs offen sind                                       │
 │  15. Zeigt System-Notification an (mit Icon, Text, Vibration)      │
-│  16. Leitet Nachricht an offene Tabs weiter                        │
+│  16a. Tabs offen → Leitet Nachricht an offene Tabs weiter          │
+│  16b. Kein Tab offen → Speichert in IndexedDB (Offline-Puffer)     │
 │                                                                      │
 │  PWA (app.js)                                                        │
 │  17. Empfängt Nachricht vom Service Worker                          │
@@ -1321,10 +1323,13 @@ nssm start PushService
 
 - **Ein SW pro Scope**: Alle Tabs unter `/push/` teilen denselben Service Worker.
   Mehrere Spieler im selben Browser teilen denselben Push-Endpoint. Der Service Worker
-  empfängt alle Nachrichten, speichert sie in IndexedDB und leitet sie an alle offenen
-  Tabs weiter. Jeder offene Tab speichert Nachrichten für alle Spieler in localStorage
+  empfängt alle Nachrichten und prüft, ob Tabs geöffnet sind:
+  - **Tabs offen**: Nachricht wird per `postMessage` an alle Tabs weitergeleitet
+    (keine IndexedDB-Speicherung → keine Doppel-Zustellung).
+  - **Kein Tab offen**: Nachricht wird in IndexedDB gespeichert. Beim Öffnen eines Tabs
+    werden verpasste Nachrichten abgerufen, in localStorage gemergt und aus IndexedDB gelöscht.
+  Jeder offene Tab speichert Nachrichten für alle Spieler in localStorage
   (nicht nur für den eigenen). Die Anzeige erfolgt weiterhin nur für den eigenen Spieler.
-  Beim Öffnen eines Tabs werden verpasste Nachrichten aus IndexedDB abgerufen.
   Windows-Notifications zeigen die Spielernummer im Titel, damit erkennbar ist,
   für wen die Nachricht bestimmt ist.
 
@@ -1346,12 +1351,14 @@ nssm start PushService
 - TTL (Time to Live): 24 Stunden (konfiguriert im `WebPushService.java`)
 - Nachrichten, die älter als 24h sind, verfallen
 - Beim nächsten Online-Gang des Browsers werden zwischengespeicherte Nachrichten zugestellt
-- **Zweistufige lokale Zwischenspeicherung**:
-  1. Wenn ein anderer Spieler-Tab offen ist, speichert dieser die Nachricht in localStorage
-     für den richtigen Spieler mit (sofort verfügbar beim nächsten Tab-Öffnen)
-  2. Zusätzlich speichert der Service Worker jede Nachricht in IndexedDB. Beim Öffnen
-     eines Tabs werden verpasste Nachrichten abgerufen und in die Nachrichtenliste gemergt.
-     Dies funktioniert auch wenn gar kein Tab geöffnet war.
+- **Zweistufige lokale Zwischenspeicherung** (exklusiv — nicht gleichzeitig):
+  1. **Tabs offen**: Nachricht wird per `postMessage` an alle offenen Tabs weitergeleitet.
+     Jeder Tab speichert die Nachricht in localStorage für alle Spieler.
+  2. **Kein Tab offen**: Der Service Worker speichert die Nachricht in IndexedDB.
+     Beim Öffnen eines Tabs werden verpasste Nachrichten abgerufen, per Text-Dedup
+     in localStorage gemergt und aus IndexedDB gelöscht.
+  Durch die exklusive Wahl (entweder postMessage ODER IndexedDB, nie beides)
+  wird eine doppelte Zustellung vermieden.
 
 ### Datenspeicherung im Browser
 

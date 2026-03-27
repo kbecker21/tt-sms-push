@@ -1,3 +1,52 @@
+# Release Notes — v6 (2026-03-27): Doppelte Nachrichten-Zustellung behoben
+
+## Bugfixes
+
+### Jede Nachricht wurde doppelt zugestellt (Kritisch)
+
+Beim Empfang einer neuen Nachricht im Browser wurde die vorherige Nachricht erneut
+angezeigt. Jede Nachricht erschien insgesamt zweimal in der Nachrichtenliste.
+
+**Ursache**: Der Service Worker speicherte jede eingehende Push-Nachricht **gleichzeitig**
+in IndexedDB (Offline-Puffer) UND leitete sie per `postMessage` an offene Tabs weiter.
+Dadurch existierte jede Nachricht in zwei Speichern (IndexedDB + localStorage). Bei
+einem Seitenneuladen oder Tab-Wechsel wurden die IndexedDB-Nachrichten als "verpasste
+Nachrichten" erneut geladen. Die zeitbasierte Deduplizierung (`time + '|' + text`)
+konnte diese nicht erkennen, weil die Zeitstempel aus unterschiedlichen Quellen stammten
+(IndexedDB: `toISOString()` im Service Worker, localStorage: `toLocaleTimeString()` im Tab).
+
+**Lösung (zweistufig)**:
+1. **sw.js**: Der Service Worker prüft jetzt **zuerst**, ob Tabs geöffnet sind:
+   - Tabs offen → Nachricht wird nur per `postMessage` weitergeleitet (KEIN IndexedDB)
+   - Kein Tab offen → Nachricht wird nur in IndexedDB gespeichert (für späteres Abrufen)
+   Die doppelte Speicherung ist damit ausgeschlossen.
+2. **app.js**: Die Deduplizierung beim Zusammenführen verpasster Nachrichten verwendet
+   jetzt nur den **Nachrichtentext** als Schlüssel (statt `time + '|' + text`), da der
+   Text zuverlässiger ist als Zeitstempel aus unterschiedlichen Quellen.
+
+**Geänderte Dateien**: `sw.js`, `app.js`
+
+## Geänderte Dateien (Zusammenfassung)
+
+| Datei | Änderung |
+|-------|----------|
+| `sw.js` | Push-Handler: exklusive Wahl zwischen postMessage (Tabs offen) und IndexedDB (kein Tab offen) statt beides gleichzeitig |
+| `app.js` | Missed-Messages-Handler: textbasierte Deduplizierung statt zeitbasierter |
+
+## Dokumentation aktualisiert
+
+- `DOKUMENTATION.md` — Abschnitte 5.2 (Service Worker), 9.1 (Gesamtablauf), 11 (Offline-Nachrichten, Service Worker Verhalten) aktualisiert
+- `RELEASE_NOTES.md` — Diesen Eintrag hinzugefügt
+
+## Hinweise zum Update
+
+1. **push-service**: Neu bauen und deployen (`ant compile && ant jar && ant dist`)
+2. **SMSCenterExt**: Keine Änderungen nötig
+3. **Browser**: Spieler müssen **Ctrl+F5** drücken (oder den Service Worker in den DevTools
+   deregistrieren), damit die aktualisierte `sw.js` geladen wird
+
+---
+
 # Release Notes — v5 (2026-03-26): Fehler und Korrekturen in SMSCenterExt
 
 ## Bugfixes
