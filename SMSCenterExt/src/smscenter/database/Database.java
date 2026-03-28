@@ -251,19 +251,20 @@ public class Database {
         String[] rows = {
             "id",
             "status",
+            "plNr",
             "recipient",
             "text",
             "create_date",
             "ref_no",
             "gateway_id"
         };
-        
+
         if (order != 0 && Math.abs(order) <= rows.length && rows[Math.abs(order) - 1] != null) {
             sort = rows[Math.abs(order) - 1] + " " + (order > 0 ? " ASC" : " DESC");
         }
-       
+
         Connection conn;
-        String sql = "SELECT * FROM (SELECT ROW_NUMBER() OVER (ORDER BY " + sort + ") AS row, id, status, recipient, text, create_date, ref_no, gateway_id FROM smsserver_out ";
+        String sql = "SELECT * FROM (SELECT ROW_NUMBER() OVER (ORDER BY " + sort + ") AS row, id, status, plNr, recipient, text, create_date, ref_no, gateway_id FROM smsserver_out ";
         sql += " WHERE 1 = 1 ";
         if (status != null && !status.isEmpty())
             sql += " AND status = ? "; // '" + status + "' ";  
@@ -305,15 +306,17 @@ public class Database {
                 try (ResultSet rs = stmt.executeQuery()) {
                 
                     while (rs.next()) {
-                        Object[] s = new Object[8];
-                        s[0] = rs.getInt(1);
-                        s[1] = rs.getInt(2);
-                        s[2] = rs.getString(3);
-                        s[3] = rs.getString(4);
-                        s[4] = rs.getString(5);
-                        s[5] = rs.getTimestamp(6);
-                        s[6] = rs.getString(7);
-                        s[7] = rs.getString(8);
+                        Object[] s = new Object[9];
+                        s[0] = rs.getInt(1);    // row
+                        s[1] = rs.getInt(2);    // id
+                        s[2] = rs.getString(3); // status
+                        int plNrVal = rs.getInt(4);
+                        s[3] = rs.wasNull() ? "" : String.valueOf(plNrVal); // plNr
+                        s[4] = rs.getString(5); // recipient
+                        s[5] = rs.getString(6); // text
+                        s[6] = rs.getTimestamp(7); // create_date
+                        s[7] = rs.getString(8); // ref_no
+                        s[8] = rs.getString(9); // gateway_id
 
                         list.add(s);
                     }

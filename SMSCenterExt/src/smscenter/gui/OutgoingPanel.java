@@ -125,8 +125,8 @@ public class OutgoingPanel extends BasePanel {
             
             for (Object[] row : list) {
                 int id = ((Integer) row[1]);
-                String ref = row[6].toString();
-                String gw = row[7].toString();
+                String ref = row[7].toString();
+                String gw = row[8].toString();
 
                 msgList.add(new Object[] {id, ref, gw});
                 
@@ -304,14 +304,14 @@ public class OutgoingPanel extends BasePanel {
 
             },
             new String [] {
-                "Row", "ID", "Status", "Receiver", "Text", "Date", "Ref", "Gateway"
+                "Row", "ID", "Status", "Player", "Receiver", "Text", "Date", "Ref", "Gateway"
             }
         ) {
             Class[] types = new Class [] {
-                java.lang.Integer.class, java.lang.Integer.class, java.lang.String.class, java.lang.String.class, java.lang.String.class, java.lang.Object.class, java.lang.String.class, java.lang.String.class
+                java.lang.Integer.class, java.lang.Integer.class, java.lang.String.class, java.lang.String.class, java.lang.String.class, java.lang.String.class, java.lang.Object.class, java.lang.String.class, java.lang.String.class
             };
             boolean[] canEdit = new boolean [] {
-                false, false, false, false, false, false, false, false
+                false, false, false, false, false, false, false, false, false
             };
 
             public Class getColumnClass(int columnIndex) {
@@ -333,9 +333,10 @@ public class OutgoingPanel extends BasePanel {
         if (outgoingTable.getColumnModel().getColumnCount() > 0) {
             outgoingTable.getColumnModel().getColumn(1).setHeaderValue(bundle.getString("ID")); // NOI18N
             outgoingTable.getColumnModel().getColumn(2).setHeaderValue(bundle.getString("Status")); // NOI18N
-            outgoingTable.getColumnModel().getColumn(3).setHeaderValue(bundle.getString("Receiver")); // NOI18N
-            outgoingTable.getColumnModel().getColumn(4).setHeaderValue(bundle.getString("Text")); // NOI18N
-            outgoingTable.getColumnModel().getColumn(5).setHeaderValue(bundle.getString("Date")); // NOI18N
+            outgoingTable.getColumnModel().getColumn(3).setHeaderValue("Player"); // NOI18N
+            outgoingTable.getColumnModel().getColumn(4).setHeaderValue(bundle.getString("Receiver")); // NOI18N
+            outgoingTable.getColumnModel().getColumn(5).setHeaderValue(bundle.getString("Text")); // NOI18N
+            outgoingTable.getColumnModel().getColumn(6).setHeaderValue(bundle.getString("Date")); // NOI18N
         }
 
         jLabel1.setText(bundle.getString("Selection:")); // NOI18N
@@ -521,13 +522,13 @@ public class OutgoingPanel extends BasePanel {
         
         int row = outgoingTable.rowAtPoint(evt.getPoint());
         statusTextField.setText(outgoingTable.getModel().getValueAt(row, 2).toString());
-        receiverTextField.setText(outgoingTable.getModel().getValueAt(row, 3).toString());
-        dateTextField.setText(outgoingTable.getModel().getValueAt(row, 5).toString());
-        if (outgoingTable.getModel().getValueAt(row, 6) != null)
-            refTextField.setText(outgoingTable.getModel().getValueAt(row, 6).toString());
+        receiverTextField.setText(outgoingTable.getModel().getValueAt(row, 4).toString());
+        dateTextField.setText(outgoingTable.getModel().getValueAt(row, 6).toString());
+        if (outgoingTable.getModel().getValueAt(row, 7) != null)
+            refTextField.setText(outgoingTable.getModel().getValueAt(row, 7).toString());
         else
             refTextField.setText("");
-        textTextArea.setText(outgoingTable.getModel().getValueAt(row, 4).toString());
+        textTextArea.setText(outgoingTable.getModel().getValueAt(row, 5).toString());
         msgLengthLabel.setText("" + textTextArea.getText().length() + " chars");
         
         // javax.swing.JScrollPane scrollPane = new javax.swing.JScrollPane(detailPanel);
@@ -568,9 +569,9 @@ public class OutgoingPanel extends BasePanel {
                     int[] rows = outgoingTable.getSelectedRows();
 
                     for (int i = rows.length; i-- > 0; ) {
-                        if (outgoingTable.getModel().getValueAt(rows[i], 6).toString().isEmpty()) 
+                        if (outgoingTable.getModel().getValueAt(rows[i], 7).toString().isEmpty())
                             continue;
-                        
+
                         int id = ((Integer) outgoingTable.getModel().getValueAt(rows[i], 1));
                         database.setMessageStatus(id, "?");
                     }

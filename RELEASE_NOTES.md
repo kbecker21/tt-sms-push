@@ -1,3 +1,33 @@
+# Release Notes — v7.2 (2026-03-28): Player-Spalte im Outgoing-Panel
+
+## Neue Spalte "Player" in der Outgoing-Tabelle
+
+Im Panel/Tab "Outgoing" wird zwischen "Status" und "Receiver" die neue Spalte **"Player"**
+angezeigt. Sie enthält den Wert aus `smsserver_out.plNr` und zeigt direkt, welchem Spieler
+die Nachricht zugeordnet ist.
+
+**Spalten-Layout vorher**: Row | ID | Status | Receiver | Text | Date | Ref | Gateway
+**Spalten-Layout neu**: Row | ID | Status | **Player** | Receiver | Text | Date | Ref | Gateway
+
+### Geänderte Dateien
+
+| Datei | Änderung |
+|-------|----------|
+| `Database.java` (smscenter/database) | `getOutgoingMessages()`: SQL SELECT um `plNr` erweitert, Object-Array von 8 auf 9 Elemente, `rows`-Array für Sortierung erweitert |
+| `OutgoingPanel.java` | Tabellenmodell um "Player"-Spalte erweitert, alle Spaltenindizes ab Position 3 um +1 verschoben (betrifft `updateStatus()`, `outgoingTableMouseClicked()`, `queryButtonActionPerformed()`) |
+
+### Hinweis zur Index-Verschiebung
+
+Da die neue Spalte **zwischen** bestehenden Spalten eingefügt wird (nicht am Ende),
+mussten alle hartcodierten Spaltenindizes >= 3 in `OutgoingPanel.java` angepasst werden:
+
+- `updateStatus()`: ref `row[6]→row[7]`, gateway `row[7]→row[8]`
+- `outgoingTableMouseClicked()`: receiver `3→4`, text `4→5`, date `5→6`, ref `6→7`
+- `queryButtonActionPerformed()`: ref `6→7`
+- Spalten 0 (Row), 1 (ID), 2 (Status) bleiben unverändert
+
+---
+
 # Release Notes — v7.1 (2026-03-28): Bugfix Kompilierfehler + SQL-Spaltenreihenfolge
 
 ## Bugfixes

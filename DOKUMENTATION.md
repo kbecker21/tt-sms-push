@@ -915,6 +915,7 @@ SMSCenterExt/
 │   ├── gui/                        # Swing-Oberfläche
 │   │   ├── MainFrame.java
 │   │   ├── BasePanel.java
+│   │   ├── OutgoingPanel.java      # Outgoing-Tab (Spalten: Row,ID,Status,Player,Receiver,Text,Date,Ref,Gateway)
 │   │   └── settings/
 │   │       ├── GatewaySettings.java
 │   │       ├── Settings.java
@@ -1439,6 +1440,9 @@ ALTER TABLE smsserver_out ADD plNr int NULL DEFAULT(NULL);
 
 Bestehende Nachrichten (ohne plNr) werden weiterhin über die Rückwärtssuche
 (Telefonnummer → Spielernummer) zugestellt. Neue Nachrichten nutzen den direkten Weg.
+
+Die Spalte `plNr` wird ab v7.2 auch im GUI angezeigt: Im Tab "Outgoing" erscheint
+die neue Spalte **"Player"** zwischen "Status" und "Receiver".
 
 ### Sicherheitshinweise
 
