@@ -1,6 +1,7 @@
 CREATE TABLE [dbo].[smsserver_out](
 	[id] [bigint] IDENTITY(1,1) NOT NULL,
 	[type] [char](1) NOT NULL DEFAULT ('O'),
+	[plNr] [int] NULL DEFAULT (NULL),
 	[recipient] [nvarchar](32) NOT NULL,
 	[text] [nvarchar](1000) NOT NULL,
 	[wap_url] [nvarchar](100) NULL,
@@ -19,7 +20,6 @@ CREATE TABLE [dbo].[smsserver_out](
 	[status] [char](1) NOT NULL DEFAULT ('U'),
 	[errors] [int] NOT NULL DEFAULT (0),
 	[gateway_id] [nvarchar](64) NOT NULL DEFAULT ('*'),
-	[plNr] [int] NULL DEFAULT (NULL),
         CONSTRAINT [PK_smssvr_out] PRIMARY KEY ([id])
 )
 GO
@@ -27,6 +27,3 @@ GO
 -- Migration fuer bestehende Datenbanken:
 -- ALTER TABLE smsserver_out ADD plNr int NULL DEFAULT(NULL);
 -- GO
-
-
-

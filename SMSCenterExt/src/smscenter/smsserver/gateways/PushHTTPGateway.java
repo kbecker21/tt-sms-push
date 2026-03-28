@@ -41,17 +41,19 @@ public class PushHTTPGateway extends org.smslib.AGateway
 	private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
 	/**
-	 * Transfer-Cache for player numbers: messageId → plNr.
+	 * Transfer-Cache for player numbers: messageId (long) → plNr.
 	 * Populated by the DB interface (getMessagesToSend), consumed by sendMessage().
 	 * Uses remove() to avoid memory leaks.
 	 */
-	private static final ConcurrentHashMap<String, String> playerNrCache = new ConcurrentHashMap<>();
+	private static final ConcurrentHashMap<Long, String> playerNrCache = new ConcurrentHashMap<>();
 
 	/**
 	 * Store a player number for a message. Called by the DB interface
 	 * when reading unsent messages from smsserver_out.
+	 * @param messageId the OutboundMessage.getMessageId() (long)
+	 * @param plNr the player number as string
 	 */
-	public static void setPlayerNr(String messageId, String plNr)
+	public static void setPlayerNr(long messageId, String plNr)
 	{
 		playerNrCache.put(messageId, plNr);
 	}

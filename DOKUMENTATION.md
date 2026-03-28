@@ -1021,9 +1021,9 @@ PushHTTPGateway.sendMessage(msg)
 gespeichert, unabhängig von internen Präfixen.
 
 **Transfer-Mechanismus**: Da `OutboundMessage` (in `smslib-v3.jar`) nicht erweitert
-werden kann, wird ein statischer `ConcurrentHashMap`-Cache in `PushHTTPGateway`
-als Transfer-Brücke verwendet. Der Cache verwendet `remove()` statt `get()`,
-um Memory-Leaks zu vermeiden.
+werden kann, wird ein statischer `ConcurrentHashMap<Long, String>`-Cache in `PushHTTPGateway`
+als Transfer-Brücke verwendet (`messageId (long) → plNr`). Der Cache verwendet `remove()`
+statt `get()`, um Memory-Leaks zu vermeiden.
 
 **Fallback**: Wenn keine plNr in `smsserver_out` gespeichert ist (Altdaten,
 direkte Telefonnummer-Sends), wird die bisherige Rückwärtssuche über

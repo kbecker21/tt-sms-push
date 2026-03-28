@@ -1,3 +1,24 @@
+# Release Notes — v7.1 (2026-03-28): Bugfix Kompilierfehler + SQL-Spaltenreihenfolge
+
+## Bugfixes
+
+### Kompilierfehler in interfaces/Database.java behoben
+
+`msg.getMessageId()` gibt `long` zurück, nicht `String`. Der Aufruf
+`PushHTTPGateway.setPlayerNr(msg.getMessageId(), ...)` schlug fehl mit:
+> Inkompatible Typen: long kann nicht in String konvertiert werden
+
+**Fix**: `PushHTTPGateway.playerNrCache` von `ConcurrentHashMap<String, String>`
+auf `ConcurrentHashMap<Long, String>` geändert. Die Methode `setPlayerNr()` akzeptiert
+jetzt `long messageId` statt `String messageId`.
+
+### SQL-Schema: plNr-Spalte vor recipient verschoben
+
+In `smsserver_out.sql` steht `plNr` jetzt direkt nach `type` und vor `recipient`
+(wie von Michael gewünscht, bessere Lesbarkeit).
+
+---
+
 # Release Notes — v7 (2026-03-28): Spielernummer direkt statt Rückwärtssuche
 
 ## Kernänderung: Spielernummer (plNr) direkt in smsserver_out gespeichert
