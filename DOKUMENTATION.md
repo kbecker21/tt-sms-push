@@ -3,7 +3,7 @@
 Dieses Dokument beschreibt Einrichtung, Konfiguration, Test und Betrieb der beiden
 Projekte **push-service** (Web-Push-Server) und **SMSCenterExt** (SMS-Gateway mit Push-Erweiterung).
 
-Stand: 2026-03-26
+Stand: 2026-03-28
 
 ---
 
@@ -66,8 +66,8 @@ SMSCenterExt (Desktop-App)              push-service (eigener Prozess)        Br
 │ PushHTTPGateway.java     │────────────>│ POST /api/push/send       │──────────>│ Service Worker │
 │ (OkHttp + Gson)          │             │   (Bearer-Token Auth)     │           │ (sw.js)        │
 │                          │             │                           │           │                │
-│ Telefonnr → Spielernr    │             │ POST /api/push/register   │<──────────│ PWA (app.js)   │
-│ (DB-Lookup)              │             │ GET  /api/push/status     │<──────────│                │
+│ plNr direkt aus DB       │             │ POST /api/push/register   │<──────────│ PWA (app.js)   │
+│ (Fallback: DB-Lookup)    │             │ GET  /api/push/status     │<──────────│                │
 └──────────────────────────┘             │ POST /api/push/unregister │<──────────│                │
                                          │                           │           └────────────────┘
                                          │ GET  /push/* (PWA-Dateien)│
@@ -993,32 +993,42 @@ gateway.0.description=Push Notification Gateway
 gateway.0.outbound=yes
 ```
 
-### 7.5 Empfänger-Zuordnung (Telefonnummer → Spielernummer)
+### 7.5 Empfänger-Zuordnung (Spielernummer → Push-Nachricht)
 
 **Das Problem**: SMSCenter kennt Spieler über ihre **Telefonnummer** (z.B. `+436991234567`).
 Der push-service kennt Spieler über ihre **Spielernummer** (z.B. `2001`).
+Wenn mehrere Spieler dieselbe Telefonnummer haben (z.B. Vater meldet zwei Kinder an),
+ist eine Rückwärtssuche (Telefonnummer → Spielernummer) nicht eindeutig.
 
-**Die Lösung**: Das `PushHTTPGateway` führt eine automatische Rückwärts-Suche durch:
+**Die Lösung (ab v7)**: Die Spielernummer wird direkt im SMSCenter-Kern gespeichert und
+ohne Rückwärtssuche an den push-service weitergereicht:
 
 ```
-SMSCenter will SMS an +436991234567 senden
+SMSCenter sendMessage("2001", text)
+  → plNr = 2001 % 10000 = 2001
+  → INSERT INTO smsserver_out (recipient, text, ..., plNr) VALUES('+43...', text, ..., 2001)
         ↓
-PushHTTPGateway.resolvePlayerId("+436991234567")
+getMessagesToSend()
+  → SELECT ..., plNr FROM smsserver_out WHERE status = 'U'
+  → PushHTTPGateway.setPlayerNr(messageId, "2001")
         ↓
-SQL: SELECT DISTINCT plNr FROM smscenter_phones
-     WHERE phone LIKE '%436991234567' OR phone LIKE '%+436991234567'
-        ↓
-Ergebnis: plNr = "2001"
-        ↓
-HTTP POST an push-service: {"playerId": "2001", "message": "..."}
+PushHTTPGateway.sendMessage(msg)
+  → playerId = playerNrCache.remove(messageId)  // "2001" — direkt aus Cache
+  → HTTP POST an push-service: {"playerId": "2001", "message": "..."}
 ```
 
-**Voraussetzung**: In der Tabelle `smscenter_phones` muss die Zuordnung
-Spielernummer ↔ Telefonnummer gepflegt sein. Das geschieht über die normale
-SMSCenter-Verwaltung.
+**Warum plNr % 10000?** Organisatorische Gründe: Die Spielernummer wird 4-stellig
+gespeichert, unabhängig von internen Präfixen.
 
-**Fallback**: Wenn keine Spielernummer gefunden wird, wird die Telefonnummer
-als `playerId` verwendet (und eine Warnung geloggt).
+**Transfer-Mechanismus**: Da `OutboundMessage` (in `smslib-v3.jar`) nicht erweitert
+werden kann, wird ein statischer `ConcurrentHashMap`-Cache in `PushHTTPGateway`
+als Transfer-Brücke verwendet. Der Cache verwendet `remove()` statt `get()`,
+um Memory-Leaks zu vermeiden.
+
+**Fallback**: Wenn keine plNr in `smsserver_out` gespeichert ist (Altdaten,
+direkte Telefonnummer-Sends), wird die bisherige Rückwärtssuche über
+`smscenter_phones` als Fallback verwendet. Dafür muss das Database-Interface
+konfiguriert sein.
 
 ### 7.6 Technischer Hintergrund: SMSLib-Integration
 
@@ -1070,7 +1080,8 @@ Service.sendMessage(msg):
       → LoadBalancer.balance(): Wählt ein Gateway (RoundRobin)
   → gateway.sendMessage(msg)
       → PushHTTPGateway.sendMessage()
-        → resolvePlayerId(phone) → plNr via DB-Lookup
+        → playerId = playerNrCache.remove(messageId) // plNr aus Cache (ab v7)
+        → Falls nicht im Cache: resolvePlayerId(phone) → plNr via DB-Lookup (Fallback)
         → Deterministische messageId: UUID.nameUUIDFromBytes(playerId + text)
           (stabil über SMSLib-Retries — gleicher Input = gleiche ID)
         → Request.Builder mit URL-Validierung (try/catch IllegalArgumentException)
@@ -1170,14 +1181,19 @@ den push-service per curl anspricht (siehe Abschnitt 6.1, Schritt 4).
 │                                                                      │
 │  SMSCenterExt Desktop-App                                           │
 │  1. Ergebnis wird eingetragen (z.B. Mueller 3:1 Schmidt)           │
-│  2. Nachricht wird in smsserver_out gespeichert (Status: U)        │
-│  3. OutboundPollingThread holt Nachricht (Status → Q)              │
+│  2. sendMessage("2001", text):                                      │
+│     plNr = 2001 % 10000 = 2001                                     │
+│     Telefonnummer aus smscenter_phones lesen                        │
+│     INSERT smsserver_out (recipient, text, plNr) mit plNr=2001     │
+│  3. OutboundPollingThread holt Nachricht (Status U → Q)            │
+│     getMessagesToSend() liest plNr aus smsserver_out               │
+│     → PushHTTPGateway.setPlayerNr(messageId, "2001")               │
 │  4. SMSLib Router findet PushHTTPGateway (outbound + STARTED)      │
-│  5. Telefonnummer des Spielers wird aus smscenter_phones gelesen    │
 │                                                                      │
 │  PushHTTPGateway.sendMessage()                                       │
-│  6. resolvePlayerId(): +436991234567 → "2001"                      │
-│  6b. messageId = UUID.nameUUIDFromBytes(playerId + text)            │
+│  5. playerId = playerNrCache.remove(messageId) → "2001" (direkt)  │
+│     (Fallback: resolvePlayerId() via DB-Lookup)                     │
+│  6. messageId = UUID.nameUUIDFromBytes(playerId + text)             │
 │  7. HTTP POST an push-service: /api/push/send                       │
 │     mit Bearer-Token und {playerId, message, messageId}             │
 │                                                                      │
@@ -1186,7 +1202,7 @@ den push-service per curl anspricht (siehe Abschnitt 6.1, Schritt 4).
 ┌─ push-service (Server) ────────────────────────────────────────────┐
 │                                                                      │
 │  SendHandler                                                         │
-│  8. Bearer-Token prüfen, messageId (UUID) generieren               │
+│  8. Bearer-Token prüfen, messageId aus Request übernehmen          │
 │  9. Device für Spieler 2001 aus DB laden (max. 1 pro Spieler)      │
 │  10. Für jedes Gerät:                                               │
 │      a) Nachricht mit AES-128-GCM verschlüsseln (RFC 8291)        │
@@ -1237,7 +1253,8 @@ Vor dem produktiven Einsatz prüfen:
 - [ ] Gleicher `apiKey` im SMSCenterExt Push-Gateway konfiguriert wie `push.api.key`
 - [ ] `serviceUrl` im SMSCenterExt korrekt (z.B. `http://localhost:8080` oder `https://www.ttm.co.at`)
 - [ ] Push-Gateway als Outbound konfiguriert (Checkbox)
-- [ ] Datenbank-Interface konfiguriert (für Telefonnummer → Spielernummer Auflösung)
+- [ ] Datenbank-Migration durchgeführt: `ALTER TABLE smsserver_out ADD plNr int NULL DEFAULT(NULL)`
+- [ ] Datenbank-Interface konfiguriert (für Telefonnummer → Spielernummer Fallback-Auflösung)
 - [ ] Tabelle `smscenter_phones` ist gepflegt (Spielernummer ↔ Telefonnummer)
 
 **Integrationstest:**
@@ -1392,10 +1409,36 @@ nssm start PushService
 | `NoClassDefFoundError: kotlin/jvm/internal/Intrinsics` | Kotlin-JARs fehlen im Classpath. OkHttp 4.x benötigt `kotlin-stdlib` zur Laufzeit. | `Clean and Build` in NetBeans (Shift+F11) — Ivy löst Kotlin-JARs transitiv auf, NetBeans kopiert sie nach `dist/lib/`. |
 | Nachricht bleibt auf Status `U` in `smsserver_out` | PushHTTPGateway wird nicht als outbound erkannt (SMSLib `attributes`-Bitfeld). | Sicherstellen, dass der aktuelle Code mit `setAttributes(getAttributes() \| 1)` im PushHTTPGateway-Konstruktor verwendet wird. `Clean and Build` ausführen. |
 | Log: "Push send failed ... HTTP 401" | API Key Mismatch | `apiKey` in SMSCenterExt muss identisch sein mit `push.api.key` in `push-service.properties` |
-| Log: "No player found for phone ..." | Telefonnummer nicht in `smscenter_phones` hinterlegt | Spieler in der SMSCenter-Verwaltung mit Telefonnummer anlegen |
+| Log: "No player found for phone ..." | Fallback-Rückwärtssuche: Telefonnummer nicht in `smscenter_phones` | Spieler in der SMSCenter-Verwaltung mit Telefonnummer anlegen, oder sicherstellen dass plNr in smsserver_out gespeichert wird |
 | Log: "PushHTTPGateway: Invalid service URL ..." | URL fehlt oder ist ungültig | Service URL in der Gateway-Konfiguration prüfen (muss mit `http://` oder `https://` beginnen — wird seit v5 automatisch ergänzt) |
-| Log: "PushHTTPGateway: No database configured" | Kein Database-Interface konfiguriert | In den Einstellungen muss neben dem Push-Gateway auch ein Database-Interface konfiguriert sein (für die Telefonnr→Spielernr-Auflösung) |
+| Log: "PushHTTPGateway: No database configured" | Kein Database-Interface konfiguriert | In den Einstellungen muss neben dem Push-Gateway auch ein Database-Interface konfiguriert sein (für die Telefonnr→Spielernr Fallback-Auflösung) |
+| Log: "Using cached plNr ... for recipient ..." | Normalbetrieb (ab v7) | plNr wurde direkt aus smsserver_out gelesen — Rückwärtssuche wurde nicht benötigt |
 | Nachricht wird gesendet (Status `S`), aber keine Notification | Spieler nicht im Browser registriert, oder Browser geschlossen | push-service-Log prüfen: `sent: 0` = kein Gerät registriert. Spieler muss im Browser auf "Aktivieren" klicken. |
+
+### IndexedDB im Browser — warum sie leer sein kann
+
+Die IndexedDB (`ttm-push-messages`) dient als **Offline-Puffer** für Nachrichten, die
+eintreffen wenn kein Tab für den betroffenen Spieler geöffnet ist. Sie ist im Normalfall
+leer — das ist **kein Fehler**, sondern bedeutet, dass alle Nachrichten erfolgreich an
+einen offenen Tab zugestellt wurden:
+
+- **Tab offen**: Nachricht geht per `postMessage` direkt an den Tab → localStorage.
+  IndexedDB wird nicht beschrieben.
+- **Kein Tab offen**: Service Worker speichert in IndexedDB. Beim nächsten Tab-Öffnen
+  werden die Nachrichten in localStorage übernommen und aus IndexedDB gelöscht.
+
+Die IndexedDB wird weiterhin benötigt und darf **nicht** entfernt werden.
+
+### Datenbank-Migration (v7)
+
+Ab v7 muss die Tabelle `smsserver_out` um die Spalte `plNr` erweitert werden:
+
+```sql
+ALTER TABLE smsserver_out ADD plNr int NULL DEFAULT(NULL);
+```
+
+Bestehende Nachrichten (ohne plNr) werden weiterhin über die Rückwärtssuche
+(Telefonnummer → Spielernummer) zugestellt. Neue Nachrichten nutzen den direkten Weg.
 
 ### Sicherheitshinweise
 

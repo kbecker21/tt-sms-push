@@ -45,6 +45,7 @@ import org.smslib.OutboundMessage.MessageStatuses;
 import org.smslib.OutboundWapSIMessage.WapSISignals;
 import org.smslib.helper.Logger;
 import smscenter.smsserver.SMSServer;
+import smscenter.smsserver.gateways.PushHTTPGateway;
 
 /**
  * Interface for database communication with SMSServer. <br />
@@ -293,7 +294,7 @@ public class Database extends Interface<Integer>
 				con = getDbConnection();
 				cmd = con.createStatement(ResultSet.TYPE_SCROLL_SENSITIVE, ResultSet.CONCUR_UPDATABLE);
 				pst = con.prepareStatement("update " + getProperty("tables.sms_out", "smsserver_out") + " set status = 'Q' where id = ? ");
-				rs = cmd.executeQuery("select type, wap_expiry_date, wap_signal, encoding, recipient, wap_url, text, create_date, flash_sms, src_port, dst_port, sent_date, ref_no, priority, status_report, originator, status, errors, gateway_id, id from " + getProperty("tables.sms_out", "smsserver_out") + " where status = 'U' order by priority desc, id");
+				rs = cmd.executeQuery("select type, wap_expiry_date, wap_signal, encoding, recipient, wap_url, text, create_date, flash_sms, src_port, dst_port, sent_date, ref_no, priority, status_report, originator, status, errors, gateway_id, id, plNr from " + getProperty("tables.sms_out", "smsserver_out") + " where status = 'U' order by priority desc, id");
 				if (rs.next())
 				{
 					if (msgCount > Integer.parseInt(getProperty("batch_size"))) break;
@@ -383,6 +384,19 @@ public class Database extends Interface<Integer>
 						msg.setGatewayId(rs.getString("gateway_id").trim());
 						msgList.add(msg);
 						getMessageCache().put(msg.getMessageId(), rs.getInt("id"));
+						// Transfer plNr to PushHTTPGateway cache for direct player addressing
+						try
+						{
+							int plNr = rs.getInt("plNr");
+							if (!rs.wasNull() && plNr > 0)
+							{
+								PushHTTPGateway.setPlayerNr(msg.getMessageId(), String.valueOf(plNr));
+							}
+						}
+						catch (SQLException ignore)
+						{
+							// plNr column may not exist in older databases
+						}
 						pst.setInt(1, rs.getInt("id"));
 						pst.executeUpdate();
 						con.commit();

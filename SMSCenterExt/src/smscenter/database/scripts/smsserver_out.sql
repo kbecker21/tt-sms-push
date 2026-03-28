@@ -19,9 +19,14 @@ CREATE TABLE [dbo].[smsserver_out](
 	[status] [char](1) NOT NULL DEFAULT ('U'),
 	[errors] [int] NOT NULL DEFAULT (0),
 	[gateway_id] [nvarchar](64) NOT NULL DEFAULT ('*'),
+	[plNr] [int] NULL DEFAULT (NULL),
         CONSTRAINT [PK_smssvr_out] PRIMARY KEY ([id])
 )
 GO
+
+-- Migration fuer bestehende Datenbanken:
+-- ALTER TABLE smsserver_out ADD plNr int NULL DEFAULT(NULL);
+-- GO
 
 
 

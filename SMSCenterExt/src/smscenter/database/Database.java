@@ -438,16 +438,22 @@ public class Database {
             return ok;
         }
         
-        if (number.charAt(0) == '+' || number.charAt(0) == '0') 
-            return sendMessageToNumber(number, text, wantStatusReport);
+        if (number.charAt(0) == '+' || number.charAt(0) == '0')
+            return sendMessageToNumber(number, text, wantStatusReport, 0);
         
         List<String> list = new java.util.ArrayList<>();
         String sql = null;
-        
+        int plNr = 0;
+
         if (number.charAt(0) == '*') {
              sql = "SELECT DISTINCT phone FROM smscenter_phones";
         } else if (Character.isDigit(number.charAt(0))) {
             sql = "SELECT phone FROM smscenter_phones WHERE plNr = " + number;
+            try {
+                plNr = Integer.parseInt(number) % 10000;
+            } catch (NumberFormatException e) {
+                // plNr bleibt 0
+            }
         } else {
             String[] s = number.split(" ");
             sql = "SELECT DISTINCT phone FROM smscenter_phones " +
@@ -487,27 +493,31 @@ public class Database {
         }
         
         for (String s : list)
-            sendMessageToNumber(s, text, wantStatusReport);
-        
+            sendMessageToNumber(s, text, wantStatusReport, plNr);
+
         return true;
     }
             
     
-    private boolean sendMessageToNumber(String number, String text, boolean wantStatusReport) {
+    private boolean sendMessageToNumber(String number, String text, boolean wantStatusReport, int plNr) {
         Connection conn;
-        String sql = "INSERT INTO smsserver_out (recipient, text, status_report) VALUES(?, ?, ?)";
-        
+        String sql = "INSERT INTO smsserver_out (recipient, text, status_report, plNr) VALUES(?, ?, ?, ?)";
+
         String msg = normalizeString(text);
-        
+
         try {
             if ( (conn = getConnection()) == null )
                 return false;
-            
+
             try (PreparedStatement stmt = conn.prepareStatement(sql)) {
                 stmt.setString(1, number);
                 stmt.setString(2, msg);
                 stmt.setInt(3, wantStatusReport ? 1 : 0);
-                
+                if (plNr > 0)
+                    stmt.setInt(4, plNr);
+                else
+                    stmt.setNull(4, java.sql.Types.INTEGER);
+
                 stmt.executeUpdate();
                 conn.commit();
             }

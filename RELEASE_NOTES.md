@@ -1,3 +1,136 @@
+# Release Notes — v7 (2026-03-28): Spielernummer direkt statt Rückwärtssuche
+
+## Kernänderung: Spielernummer (plNr) direkt in smsserver_out gespeichert
+
+### Problem: Rückwärtssuche liefert falschen Spieler (Kritisch)
+
+Das `PushHTTPGateway` führte eine Rückwärtssuche durch, um von der Telefonnummer
+auf die Spielernummer zu schliessen:
+```sql
+SELECT DISTINCT plNr FROM smscenter_phones
+WHERE phone LIKE '%436991234567' OR phone LIKE '%+436991234567'
+```
+
+Wenn mehrere Spieler dieselbe Telefonnummer haben (z.B. Vater meldet zwei Kinder an),
+liefert diese Abfrage den **ersten** Treffer statt den richtigen Spieler. Die Push-Nachricht
+wurde an den falschen Spieler zugestellt.
+
+### Lösung: SMSCenter-Kern speichert plNr direkt
+
+Die Spielernummer wird jetzt bereits beim Einfügen in die Tabelle `smsserver_out` gespeichert
+und direkt an den `PushHTTPGateway` weitergereicht. Die Rückwärtssuche entfällt als primärer
+Mechanismus und dient nur noch als Fallback für Altdaten.
+
+**Datenfluss (neu)**:
+```
+SMSCenter sendMessage("42", text)
+  → plNr = 42 % 10000 = 42
+  → INSERT INTO smsserver_out (recipient, text, ..., plNr) VALUES('+43...', text, ..., 42)
+
+getMessagesToSend()
+  → SELECT ..., plNr FROM smsserver_out WHERE status = 'U'
+  → PushHTTPGateway.setPlayerNr(messageId, "42")
+
+PushHTTPGateway.sendMessage(msg)
+  → playerId = playerNrCache.remove(messageId)  // "42" — direkt, keine DB-Abfrage
+  → POST /api/push/send {playerId: "42", message: "..."}
+```
+
+**Änderungen im Detail**:
+
+1. **`smsserver_out`-Tabelle** — Neue Spalte `plNr` (int, nullable):
+   ```sql
+   ALTER TABLE smsserver_out ADD plNr int NULL DEFAULT(NULL);
+   ```
+
+2. **`Database.java`** (SMSCenter-Kern) — `sendMessage()` berechnet `plNr % 10000` und
+   `sendMessageToNumber()` speichert die plNr im INSERT.
+
+3. **`interfaces/Database.java`** — `getMessagesToSend()` liest `plNr` aus dem ResultSet
+   und übergibt sie über einen statischen Cache (`PushHTTPGateway.setPlayerNr()`) an das Gateway.
+
+4. **`PushHTTPGateway.java`** — `sendMessage()` liest `plNr` aus dem Cache (`playerNrCache.remove()`).
+   Nur wenn keine plNr im Cache vorhanden ist (Altdaten, direkte Telefonnummer-Sends),
+   wird die bisherige Rückwärtssuche als Fallback verwendet.
+
+### Warum plNr % 10000?
+
+Organisatorische Gründe: Die Spielernummer wird 4-stellig gespeichert. `plNr mod 10000`
+stellt sicher, dass die Nummer unabhängig von Präfixen korrekt abgelegt wird.
+
+### Warum kein neues Feld in OutboundMessage?
+
+Die Klasse `OutboundMessage` ist Teil der kompilierten Bibliothek `smslib-v3.jar` und
+kann nicht direkt erweitert werden. Stattdessen wird ein statischer `ConcurrentHashMap`-Cache
+in `PushHTTPGateway` als Transfer-Mechanismus verwendet (`messageId → plNr`). Der Cache
+verwendet `remove()` statt `get()`, um Memory-Leaks zu vermeiden.
+
+## Verbesserungen
+
+### WebPushService: Error-Handling für Endpoint-URL und HTTP-Aufruf
+
+Michaels Anmerkungen zu `WebPushService.sendPush()`:
+
+1. **`URI.create(device.endpoint)`**: Wird jetzt in einem try/catch-Block ausgeführt.
+   Bei einer ungültigen URL (`IllegalArgumentException`) wird ein Fehler geloggt und
+   `-1` zurückgegeben, statt die gesamte Methode mit einer Exception abzubrechen.
+
+2. **`httpClient.send()`**: Wird jetzt explizit in einem try/catch für `IOException`
+   ausgeführt. Der Fehler wird mit der Endpoint-URL geloggt, bevor die Exception
+   weitergeworfen wird — so ist im Log erkennbar, welcher Endpoint den Fehler verursacht hat.
+
+3. **Kein `synchronized` nötig**: Der JDK `HttpClient` ist thread-safe (Javadoc:
+   "An HttpClient can be used to send multiple requests"). Im push-service werden
+   Requests pro `SendHandler`-Aufruf sequentiell abgearbeitet. Anders als beim
+   `PushHTTPGateway` (wo SMSLib-Threads parallel senden) ist hier kein
+   `synchronized`-Block erforderlich.
+
+### IndexedDB — weiterhin benötigt
+
+Michaels Beobachtung: "Die Push-Nachrichten stehen nun im LocalStorage des Browsers,
+aber die IndexedDB ist jetzt leer! Komisch. Vielleicht wird sie nicht mehr gebraucht?"
+
+**Antwort**: Die IndexedDB wird **weiterhin benötigt** als Offline-Puffer. Sie ist leer,
+weil sie korrekt funktioniert:
+
+- Wenn ein Tab für den Spieler geöffnet ist, werden Nachrichten direkt per `postMessage`
+  an den Tab geleitet und in localStorage gespeichert. IndexedDB wird nicht beschrieben.
+- Nur wenn **kein** Tab für den betroffenen Spieler offen ist, speichert der Service Worker
+  die Nachricht in IndexedDB. Beim nächsten Tab-Öffnen werden die Nachrichten aus IndexedDB
+  in localStorage übernommen und aus IndexedDB gelöscht.
+- Eine leere IndexedDB bedeutet: Alle Nachrichten wurden erfolgreich an einen offenen Tab
+  zugestellt — das ist der Normalfall.
+
+## Geänderte Dateien (Zusammenfassung)
+
+| Datei | Änderung |
+|-------|----------|
+| `smsserver_out.sql` | Neue Spalte `plNr` (int, nullable) + Migration-Kommentar |
+| `Database.java` (smscenter/database) | `sendMessage()`: plNr % 10000 berechnen; `sendMessageToNumber()`: plNr im INSERT speichern |
+| `Database.java` (smsserver/interfaces) | `getMessagesToSend()`: plNr aus ResultSet lesen, `PushHTTPGateway.setPlayerNr()` aufrufen |
+| `PushHTTPGateway.java` | Statischer `playerNrCache` (ConcurrentHashMap), `sendMessage()` nutzt Cache statt Rückwärtssuche |
+| `WebPushService.java` | try/catch für `URI.create()` + `httpClient.send()` |
+
+## Dokumentation aktualisiert
+
+- `DOKUMENTATION.md` — Abschnitte 7.5 (Empfänger-Zuordnung: neuer plNr-Flow), 7.6 (SMSLib-Integration),
+  9.1 (Gesamtablauf), 11 (Bekannte Einschränkungen, IndexedDB-Erklärung, DB-Migration) aktualisiert
+- `RELEASE_NOTES.md` — Diesen Eintrag hinzugefügt
+
+## Hinweise zum Update
+
+1. **Datenbank-Migration**: Vor dem ersten Start muss die neue Spalte angelegt werden:
+   ```sql
+   ALTER TABLE smsserver_out ADD plNr int NULL DEFAULT(NULL);
+   ```
+2. **SMSCenterExt**: Vollständigen `Clean and Build` in NetBeans ausführen (Shift+F11)
+3. **push-service**: Neu bauen und deployen (`ant compile && ant jar && ant dist`)
+4. **Browser**: Keine Änderungen nötig
+5. **Bestehende Nachrichten**: Nachrichten, die bereits in `smsserver_out` stehen (ohne plNr),
+   werden weiterhin über die Rückwärtssuche zugestellt (Fallback)
+
+---
+
 # Release Notes — v6 (2026-03-27): Doppelte Nachrichten-Zustellung behoben
 
 ## Bugfixes

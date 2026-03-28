@@ -65,7 +65,16 @@ public class WebPushService
 		byte[] encrypted = WebPushCrypto.encrypt(payload, device.p256dh, device.authKey);
 
 		// Extract audience from endpoint URL
-		URI endpointUri = URI.create(device.endpoint);
+		URI endpointUri;
+		try
+		{
+			endpointUri = URI.create(device.endpoint);
+		}
+		catch (IllegalArgumentException e)
+		{
+			log.error("Invalid push endpoint URL '{}': {}", device.endpoint, e.getMessage());
+			return -1;
+		}
 		String audience = endpointUri.getScheme() + "://" + endpointUri.getHost();
 
 		// Create VAPID auth header
@@ -83,7 +92,17 @@ public class WebPushService
 			.POST(HttpRequest.BodyPublishers.ofByteArray(encrypted))
 			.build();
 
-		HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+		HttpResponse<String> response;
+		try
+		{
+			response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+		}
+		catch (java.io.IOException e)
+		{
+			log.error("Push send I/O error for endpoint '{}': {}",
+				device.endpoint.substring(0, Math.min(80, device.endpoint.length())), e.getMessage());
+			throw e;
+		}
 
 		int statusCode = response.statusCode();
 		if (statusCode == 201 || statusCode == 202)

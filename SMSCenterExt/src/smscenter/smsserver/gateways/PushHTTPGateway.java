@@ -11,6 +11,7 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -29,13 +30,31 @@ import org.smslib.helper.Logger;
  * SMSLib Gateway implementation that sends messages via HTTP POST
  * to the PushServiceProvider for delivery as push notifications.
  *
- * Includes recipient mapping: the SMSServer writes telephone numbers
- * as recipients, but the push-service expects player numbers (plNr).
- * This gateway performs a reverse lookup in smscenter_phones.
+ * Player number resolution: the SMSCenter core writes the player number (plNr)
+ * directly into smsserver_out. The DB interface reads it and stores it in a
+ * static cache (playerNrCache) keyed by OutboundMessage ID. This gateway
+ * retrieves the plNr from the cache, avoiding the reverse lookup (phone → plNr).
+ * A reverse lookup in smscenter_phones is kept as fallback for messages without plNr.
  */
 public class PushHTTPGateway extends org.smslib.AGateway
 {
 	private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
+
+	/**
+	 * Transfer-Cache for player numbers: messageId → plNr.
+	 * Populated by the DB interface (getMessagesToSend), consumed by sendMessage().
+	 * Uses remove() to avoid memory leaks.
+	 */
+	private static final ConcurrentHashMap<String, String> playerNrCache = new ConcurrentHashMap<>();
+
+	/**
+	 * Store a player number for a message. Called by the DB interface
+	 * when reading unsent messages from smsserver_out.
+	 */
+	public static void setPlayerNr(String messageId, String plNr)
+	{
+		playerNrCache.put(messageId, plNr);
+	}
 
 	private final String serviceUrl;
 	private final String apiKey;
@@ -126,8 +145,20 @@ public class PushHTTPGateway extends org.smslib.AGateway
 	public boolean sendMessage(OutboundMessage msg) throws TimeoutException, GatewayException, IOException, InterruptedException
 	{
 		String recipient = msg.getRecipient();
-		String playerId = resolvePlayerId(recipient);
 		String messageText = msg.getText();
+
+		// Primary: use plNr from cache (set by DB interface from smsserver_out.plNr)
+		String playerId = playerNrCache.remove(msg.getMessageId());
+		if (playerId == null || playerId.isEmpty())
+		{
+			// Fallback: reverse lookup for messages without plNr (legacy/direct phone sends)
+			playerId = resolvePlayerId(recipient);
+		}
+		else
+		{
+			Logger.getInstance().logInfo("PushHTTPGateway: Using cached plNr " + playerId +
+				" for recipient " + recipient, null, getGatewayId());
+		}
 
 		// Deterministic messageId from content — stable across SMSLib retries
 		// (same playerId + text = same ID → browser deduplicates on retry)
